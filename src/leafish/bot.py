@@ -765,6 +765,18 @@ class LeafishBot:
         """Craft *count* of *item_name*; returns items actually crafted."""
         return await self.crafting.craft(item_name, count, crafting_table)
 
+    def recipes_for(self, item_name: str):
+        """All recipe variants producing *item_name*."""
+        return self.crafting.recipes_for(item_name)
+
+    def craftable_recipes(self):
+        """Recipes the bot can currently craft from its inventory."""
+        return self.crafting.craftable_recipes()
+
+    def missing_ingredients(self, recipe):
+        """Ingredients still required for *recipe* (name -> count)."""
+        return self.crafting.missing_ingredients(recipe)
+
     async def fish(self, timeout: float = 60.0, **opts) -> bool:
         """Cast the fishing rod and catch one fish."""
         return await self.fishing.fish(timeout, **opts)

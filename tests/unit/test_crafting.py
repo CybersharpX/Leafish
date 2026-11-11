@@ -1,6 +1,6 @@
 """Crafting recipe-index tests (no server needed)."""
 
-from typing import Any, cast
+from typing import Any, ClassVar, cast
 
 from leafish.data.registry import get_gamedata
 from leafish.modules.crafting import CraftingModule
@@ -22,11 +22,16 @@ class _Inv:
         return None
 
 
+class _Containers:
+    windows: ClassVar[dict] = {}
+
+
 class _Bot:
     def __init__(self, counts: dict[str, int] | None = None) -> None:
         self.world = _World()
         self.inventory = _Inv(counts)
         self.inventory_state_id = 0
+        self.containers = _Containers()
 
 
 def _module(counts: dict[str, int] | None = None) -> CraftingModule:
@@ -74,3 +79,19 @@ def test_table_only_recipes_flagged():
     assert recipes
     assert all(r.needs_table for r in recipes)
     assert cm.find_recipe("diamond_pickaxe") is None
+
+
+def test_missing_ingredients():
+    # Needs 4 planks, has 2 -> missing 2.
+    cm2 = _module({"oak_planks": 2})
+    rec2 = [r for r in cm2.recipes_for("crafting_table")
+            if r.needs == {"oak_planks": 4}]
+    assert rec2
+    assert cm2.missing_ingredients(rec2[0]) == {"oak_planks": 2}
+
+
+def test_craftable_recipes():
+    cm = _module({"oak_planks": 8})
+    craftable = {r.result_name for r in cm.craftable_recipes()}
+    assert "crafting_table" in craftable
+    assert "diamond_pickaxe" not in craftable

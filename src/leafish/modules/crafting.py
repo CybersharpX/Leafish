@@ -220,6 +220,38 @@ class CraftingModule:
                 return rec
         return None
 
+    # -- recipe planning ---------------------------------------------------------
+
+    def missing_ingredients(self, recipe: Recipe) -> dict[str, int]:
+        """Ingredients still required to craft *recipe* (name -> count)."""
+        inv = self.bot.inventory
+        missing: dict[str, int] = {}
+        for name, need in recipe.needs.items():
+            # Window player sections mirror the inventory; take the max
+            # across views rather than summing (avoids double counting).
+            have = inv.count(name)
+            for win in self.bot.containers.windows.values():
+                if win.player_offset is None:
+                    continue
+                wcount = 0
+                for s in win.player_slots():
+                    it = win.slots.get(s)
+                    if it is not None and it.name == name:
+                        wcount += it.count
+                have = max(have, wcount)
+            if have < need:
+                missing[name] = need - have
+        return missing
+
+    def craftable_recipes(self) -> list[Recipe]:
+        """Every recipe the bot can currently craft (inventory only)."""
+        out: list[Recipe] = []
+        for variants in self._ensure_index().values():
+            for rec in variants:
+                if not rec.needs_table and self.can_craft(rec):
+                    out.append(rec)
+        return out
+
     # -- crafting ---------------------------------------------------------------------
 
     async def craft(self, item_name: str, count: int = 1,
