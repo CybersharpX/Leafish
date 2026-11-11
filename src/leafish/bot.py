@@ -148,6 +148,17 @@ class LeafishBot:
             return
         self._ended = True
         await self.physics.stop()
+        # Stop any in-progress automation so tasks don't outlive the
+        # connection. Each stop is best-effort.
+        for stop in (
+            self.pathfinder.stop,
+            self.pvp.stop,
+            self.movement.stop_moving,
+        ):
+            try:
+                await stop()
+            except Exception:  # noqa: BLE001 - cleanup must not raise
+                pass
         reason = "client disconnect"
         if self.session is not None:
             reason = self.session.state.disconnect_reason or reason
@@ -832,6 +843,13 @@ class LeafishBot:
     async def interact_block(self, block, face=None) -> None:
         """Right-click a block (open containers, press buttons)."""
         await self.actions.interact_block(block, face)
+
+    async def open_container(self, block, timeout: float = 5.0) -> int | None:
+        """Right-click *block* and wait for a container window to open.
+
+        Returns the new window id, or ``None`` if none opened in time.
+        """
+        return await self.containers.open_container(block, timeout)
 
     # -- world actions ------------------------------------------------------------------
 

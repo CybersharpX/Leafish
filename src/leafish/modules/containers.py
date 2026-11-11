@@ -151,6 +151,20 @@ class ContainerModule:
         await self.bot._send_play("close_window", {"windowId": wid})
         self.windows.pop(wid, None)
 
+    async def open_container(self, reference_block,
+                             timeout: float = 5.0) -> int | None:
+        """Right-click *reference_block* and wait for the server to open
+        a window. Returns the new window id, or ``None`` on timeout."""
+        before = set(self.windows)
+        await self.bot.interact_block(reference_block)
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            new = [w for w in self.windows if w not in before]
+            if new:
+                return new[0]
+            await asyncio.sleep(0.05)
+        return None
+
     # -- bulk transfers ---------------------------------------------------------
 
     async def deposit_all(self, window_id: int,
