@@ -69,13 +69,15 @@ class CreativeModule:
                    slot: int | None = None) -> Item:
         """Give *count* of item *name*; returns the created Item.
 
-        When *slot* is ``None`` the first empty inventory slot is used,
-        falling back to slot 36 (first hotbar slot is 36 in window-0
-        indexing... actually hotbar is 36-44, main inventory 9-35).
+        When *slot* is ``None`` the first empty storage/hotbar slot
+        (window-0 slots 9-44) is used, falling back to slot 36.
         """
         item = self._build_item(name, count)
         if slot is None:
-            empty = self.bot.inventory.empty_slots()
+            # Prefer storage slots (9-35) then hotbar (36-44); avoid the
+            # crafting grid (0-4), armor (5-8) and offhand (45).
+            empty = [s for s in self.bot.inventory.empty_slots()
+                     if 9 <= s <= 44]
             slot = empty[0] if empty else 36
         await self.set_slot(slot, item)
         return item

@@ -825,20 +825,20 @@ class LeafishBot:
     # -- combat / damage ---------------------------------------------------------
 
     def _packet_hurt_animation(self, params: dict[str, Any]) -> None:
-        e = self.entities.get(_entity_id(params, "entityId"))
+        e = self._entity_or_self(_entity_id(params, "entityId"))
         if e is not None:
             e.set_rotation(e.yaw, e.pitch, head_yaw=params.get("yaw"))
         self.emit("entity_hurt", e, params)
         self.emit("entity_hurt_animation", params)
 
     def _packet_damage_event(self, params: dict[str, Any]) -> None:
-        e = self.entities.get(_entity_id(params, "entityId"))
+        e = self._entity_or_self(_entity_id(params, "entityId"))
         self.emit("entity_hurt", e, params)
         self.emit("entity_damaged", e, params)
         self.emit("damage_event", params)
 
     def _packet_death_combat_event(self, params: dict[str, Any]) -> None:
-        e = self.entities.get(_entity_id(params, "playerId"))
+        e = self._entity_or_self(_entity_id(params, "playerId"))
         if e is not None:
             e.health = 0.0
         text = component_to_text(nbt_to_python(params.get("message")))
@@ -854,7 +854,7 @@ class LeafishBot:
         self.emit("end_combat", params.get("duration"))
 
     def _packet_animation(self, params: dict[str, Any]) -> None:
-        e = self.entities.get(_entity_id(params, "entityId"))
+        e = self._entity_or_self(_entity_id(params, "entityId"))
         if e is not None:
             self.emit("entity_swing_arm", e)
         self.emit("animation", params)
@@ -862,8 +862,8 @@ class LeafishBot:
     # -- item pickup ---------------------------------------------------------------
 
     def _packet_collect(self, params: dict[str, Any]) -> None:
-        collected = self.entities.get(_entity_id(params, "collectedEntityId"))
-        collector = self.entities.get(_entity_id(params, "collectorEntityId"))
+        collected = self._entity_or_self(_entity_id(params, "collectedEntityId"))
+        collector = self._entity_or_self(_entity_id(params, "collectorEntityId"))
         count = int(params.get("pickupItemCount", 1))
         self.emit("player_collect", collector, collected, count)
         self.emit("item_collected", collected, collector, count)
@@ -905,13 +905,21 @@ class LeafishBot:
 
     # -- vehicles -------------------------------------------------------------------
 
+    def _entity_or_self(self, entity_id: int):
+        """Look up an entity, falling back to the bot's own entity."""
+        e = self.entities.get(entity_id)
+        if e is None and entity_id == self.entity_id:
+            return self.entity
+        return e
+
     def _packet_attach_entity(self, params: dict[str, Any]) -> None:
-        e = self.entities.get(_entity_id(params, "entityId"))
+        eid = _entity_id(params, "entityId")
+        e = self._entity_or_self(eid)
         vehicle_id = int(params.get("vehicleId", -1))
         if e is not None:
             vehicle = self.entities.get(vehicle_id) if vehicle_id >= 0 else None
             e.vehicle = vehicle
-            if e.id == self.entity_id:
+            if eid == self.entity_id:
                 self.player.vehicle = vehicle
                 if vehicle is None:
                     self.emit("dismount", None)
@@ -921,9 +929,10 @@ class LeafishBot:
         self.emit("attach_entity", params)
 
     def _packet_set_passengers(self, params: dict[str, Any]) -> None:
-        e = self.entities.get(_entity_id(params, "entityId"))
+        e = self._entity_or_self(_entity_id(params, "entityId"))
         passengers = [
-            self.entities.get(pid) for pid in params.get("passengers", [])
+            self._entity_or_self(pid)
+            for pid in params.get("passengers", [])
         ]
         if e is not None:
             e.passengers = [p for p in passengers if p is not None]
@@ -961,8 +970,8 @@ class LeafishBot:
     def _packet_world_particles(self, params: dict[str, Any]) -> None:
         particle_obj = params.get("particle")
         particle_id = (
-            particle_obj.get("id") if isinstance(particle_obj, dict)
-            else particle_obj
+            particle_obj.get("type") or particle_obj.get("id")
+            if isinstance(particle_obj, dict) else particle_obj
         )
         particle = Particle(
             particle_id=particle_id,
@@ -1001,7 +1010,7 @@ class LeafishBot:
 
     def _packet_entity_sound_effect(self, params: dict[str, Any]) -> None:
         name = _sound_name(params.get("sound"))
-        e = self.entities.get(_entity_id(params, "entityId"))
+        e = self._entity_or_self(_entity_id(params, "entityId"))
         self.emit(
             "entity_sound_effect_heard", name, e,
             float(params.get("volume", 1.0)), float(params.get("pitch", 1.0)),
@@ -1009,7 +1018,7 @@ class LeafishBot:
         self.emit("entity_sound_effect", params)
 
     def _packet_entity_effect(self, params: dict[str, Any]) -> None:
-        e = self.entities.get(_entity_id(params, "entityId"))
+        e = self._entity_or_self(_entity_id(params, "entityId"))
         effect = {
             "id": params.get("effectId"),
             "amplifier": params.get("amplifier"),
@@ -1021,7 +1030,7 @@ class LeafishBot:
         self.emit("entity_effect", e, effect)
 
     def _packet_remove_entity_effect(self, params: dict[str, Any]) -> None:
-        e = self.entities.get(_entity_id(params, "entityId"))
+        e = self._entity_or_self(_entity_id(params, "entityId"))
         eid = params.get("effectId")
         if e is not None:
             e.effects.pop(eid, None)
@@ -1048,16 +1057,22 @@ class LeafishBot:
             self.emit("boss_bar_updated", bar)
 
     def _apply_boss_bar(self, bar: BossBar, params: dict[str, Any]) -> None:
-        if "title" in params:
-            bar.title = _component_text(params.get("title"))
-        if "health" in params:
-            bar.health = float(params.get("health", bar.health))
-        if "color" in params:
-            bar.color = params.get("color")
-        if "dividers" in params:
-            bar.division = int(params.get("dividers", bar.division))
-        if "flags" in params:
-            flags = int(params.get("flags", 0))
+        # protolib materializes absent switch fields as None.
+        title = params.get("title")
+        if title is not None:
+            bar.title = _component_text(title)
+        health = params.get("health")
+        if health is not None:
+            bar.health = float(health)
+        color = params.get("color")
+        if color is not None:
+            bar.color = color
+        dividers = params.get("dividers")
+        if dividers is not None:
+            bar.division = int(dividers)
+        flags_raw = params.get("flags")
+        if flags_raw is not None:
+            flags = int(flags_raw)
             bar.flags = flags
             bar.darkened_sky = bool(flags & 0x01)
             bar.dragon_bar = bool(flags & 0x02)
@@ -1127,9 +1142,9 @@ class LeafishBot:
             board = ScoreBoard(name=name)
             self.scoreboards[name] = board
             self.emit("scoreboard_created", board)
-        if "displayText" in params:
+        if params.get("displayText") is not None:
             board.title = _component_text(params.get("displayText"))
-        if "type" in params:
+        if params.get("type") is not None:
             board.type = params.get("type")
         self.emit("scoreboard_title_changed", board)
 
@@ -1895,6 +1910,11 @@ def _sound_name(value: Any) -> str | None:
     if isinstance(value, str):
         return value
     if isinstance(value, dict):
+        kind = value.get("type")
+        if kind == "reference":
+            return f"registry:{value.get('id')}"
+        if kind == "inline":
+            return _sound_name(value.get("value"))
         for key in ("id", "name", "value", "key"):
             v = value.get(key)
             if isinstance(v, str):

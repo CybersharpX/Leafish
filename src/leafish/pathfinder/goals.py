@@ -125,11 +125,10 @@ class _EntityTarget:
         if callable(target):
             self._target_fn = target
         else:
-            pos = getattr(target, "position", None)
-            if pos is None:
+            if getattr(target, "position", None) is None:
                 raise TypeError(
                     "target must be an entity or a callable returning Vec3")
-            self._target_fn = lambda: pos
+            self._target_fn = lambda: target.position
 
     @property
     def point(self) -> Vec3:
