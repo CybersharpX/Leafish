@@ -56,7 +56,9 @@ Legend: ✅ done · 🚧 partial · ⬜ not started · ❌ unsupported/known iss
 ## Phase 4 — World & entities
 - ✅ World model: chunk columns, palette-container section decoding
   (single/indirect/direct), block get/set API, block search, raycast
-- 🚧 Entities: typed entity classes (Player/Mob/ItemEntity/Projectile/Vehicle)
+- ✅ Entities: typed entity classes (Player/Mob/ItemEntity/Projectile/
+  Vehicle) classified from versioned type ids, movement/metadata/
+  equipment tracking, nearest-entity queries
 - ✅ Modern 1.21.x chunk column decoding (heightmaps, block entities,
   light masks parsed; sky/block light arrays stored but not fully exposed)
 - ✅ Raycast against loaded world
