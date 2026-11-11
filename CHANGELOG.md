@@ -60,3 +60,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   tool-aware dig times.
 - Fixed: `Particle` data switch missing `default: void` in vendored
   protocol data (broke particle encode/decode).
+- Cursor/line-of-sight helpers: `bot.blockAtCursor`, `bot.entityAtCursor`,
+  entity AABB queries, `utils.geometry` ray-vs-AABB helper.
+- `bot.smelt(...)` furnace workflow (`SmeltingModule`) driving
+  `FurnaceWindow` typed view; fake server now simulates furnace
+  burn/cook ticks and container window clicks.

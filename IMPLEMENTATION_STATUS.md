@@ -97,6 +97,11 @@ Legend: ✅ done · 🚧 partial · ⬜ not started · ❌ unsupported/known iss
   (server-authoritative; fake server simulates result generation)
 - ✅ Crafting: shaped + shapeless recipes via the 2x2 inventory grid and
   3x3 crafting-table windows (`crafting_table=True` with an open table)
+- ✅ Smelting: `bot.smelt` drives `FurnaceWindow` (input/fuel/output
+  slots, burn/cook progress); server-authoritative, no client recipe
+  table needed
+- ✅ Cursor & line-of-sight: `bot.blockAtCursor`/`bot.entityAtCursor`,
+  `utils.geometry` ray-vs-AABB intersection, entity bounding boxes
 - ✅ Digging (`start_dig`/`stop_dig`/`dig` with status packets + local
   state), block placement with face/direction handling
 - ✅ Item collection (`bot.collect` paths to nearby item entities)

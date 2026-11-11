@@ -35,6 +35,7 @@ from .modules.physics import PhysicsEngine
 from .modules.player import PlayerModule
 from .modules.pvp import PVPModule
 from .modules.scoreboard import BossBar, Particle, ScoreBoard, Team
+from .modules.smelting import SmeltingModule
 from .modules.state import (
     AbilitiesInfo,
     ExperienceInfo,
@@ -51,6 +52,8 @@ from .modules.windows import (
 from .plugins import PluginManager
 from .protocol.protodef import ProtocolCodec
 from .protocol.session import ClientSession
+from .utils.geometry import ray_box_distance
+from .utils.math import yaw_pitch_to_direction
 from .utils.text import component_to_text, nbt_to_python
 from .utils.vectors import BlockPos, Vec3
 from .world.chunk_codec import ChunkDecodeError, decode_chunk_sections
@@ -100,6 +103,7 @@ class LeafishBot:
         self.farming = FarmingModule(self)
         self.containers = ContainerModule(self)
         self.anvil = AnvilModule(self)
+        self.smelting = SmeltingModule(self)
         self.creative = CreativeModule(self)
         self.player = PlayerModule(self)
         self.client = ClientModule(self)
@@ -1281,6 +1285,108 @@ class LeafishBot:
     def can_dig_block(self, block) -> bool:
         return self.world.can_dig_block(block)
 
+    # -- cursor / line of sight ------------------------------------------------------
+
+    def _eye_position(self) -> Vec3 | None:
+        entity = self.entity
+        if entity is None:
+            return None
+        return entity.position + Vec3(0.0, entity.eye_height, 0.0)
+
+    def _look_direction(self) -> Vec3 | None:
+        entity = self.entity
+        if entity is None:
+            return None
+        x, y, z = yaw_pitch_to_direction(entity.yaw, entity.pitch)
+        return Vec3(x, y, z)
+
+    def block_at_cursor(self, max_distance: float = 5.0):
+        """Block the bot is looking at within *max_distance* blocks.
+
+        Returns the :class:`~leafish.world.block.Block` or ``None``.
+        """
+        eye = self._eye_position()
+        direction = self._look_direction()
+        if eye is None or direction is None:
+            return None
+        result = self.world.raycast(eye, direction, max_distance)
+        return result[0] if result else None
+
+    def entity_at_cursor(self, max_distance: float = 5.0):
+        """Nearest entity whose collision box the view ray intersects.
+
+        Approximation: entity boxes only (blocks do not occlude the
+        result). Returns ``None`` when nothing is under the crosshair.
+        """
+        eye = self._eye_position()
+        direction = self._look_direction()
+        if eye is None or direction is None:
+            return None
+        best = None
+        best_t = max_distance
+        for e in self.entities.all():
+            if e is self.entity:
+                continue
+            t = ray_box_distance(eye, direction, e.bounding_box())
+            if t is not None and t <= best_t:
+                best_t = t
+                best = e
+        return best
+
+    def can_see_block(self, block_or_pos, max_distance: float | None = None) -> bool:
+        """Whether *block_or_pos* has line of sight from the bot's eyes.
+
+        *max_distance* additionally caps the allowed distance.
+        """
+        eye = self._eye_position()
+        if eye is None:
+            return False
+        target = self.world._to_block_pos(block_or_pos)
+        center = Vec3(target.x + 0.5, target.y + 0.5, target.z + 0.5)
+        offset = center - eye
+        dist = offset.length
+        if dist < 1e-6:
+            return True
+        if max_distance is not None and dist > max_distance:
+            return False
+        result = self.world.raycast(eye, offset, dist + 0.6)
+        if result is None:
+            return True
+        hit_block, _hit = result
+        if hit_block.position == target:
+            return True
+        # A nearer solid block occludes; a farther one does not.
+        hit_center = Vec3(
+            hit_block.position.x + 0.5,
+            hit_block.position.y + 0.5,
+            hit_block.position.z + 0.5,
+        )
+        return eye.distance_to(hit_center) > dist
+
+    def can_see_entity(self, entity,
+                       max_distance: float | None = None) -> bool:
+        """Whether *entity* has line of sight from the bot's eyes."""
+        eye = self._eye_position()
+        if eye is None or entity is None:
+            return False
+        center = entity.position + Vec3(0.0, entity.height / 2.0, 0.0)
+        offset = center - eye
+        dist = offset.length
+        if dist < 1e-6:
+            return True
+        if max_distance is not None and dist > max_distance:
+            return False
+        result = self.world.raycast(eye, offset, dist + 0.6)
+        if result is None:
+            return True
+        hit_block, _hit = result
+        hit_center = Vec3(
+            hit_block.position.x + 0.5,
+            hit_block.position.y + 0.5,
+            hit_block.position.z + 0.5,
+        )
+        return eye.distance_to(hit_center) > dist
+
     # -- chat -------------------------------------------------------------------------
 
     async def chat(self, message: str) -> None:
@@ -1404,6 +1510,19 @@ class LeafishBot:
                      window_id: int | None = None) -> int:
         """Repair/rename via an anvil window; returns items taken."""
         return await self.anvil.repair(item_name, material_name, window_id)
+
+    async def smelt(self, item_name: str, count: int = 1, *,
+                    fuel: str | None = None, block=None,
+                    window_id: int | None = None,
+                    timeout: float = 120.0) -> int:
+        """Smelt *count* of *item_name* in a furnace window.
+
+        Returns the number of output items collected. Pass *block* to
+        open a furnace first, or have one open already.
+        """
+        return await self.smelting.smelt(
+            item_name, count, fuel=fuel, block=block,
+            window_id=window_id, timeout=timeout)
 
     async def interact_block(self, block, face=None) -> None:
         """Right-click a block (open containers, press buttons)."""

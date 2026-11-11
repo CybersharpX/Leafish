@@ -68,6 +68,39 @@ class RaycastHit:
     """The last free position before the hit (useful for placement)."""
 
 
+def ray_box_distance(
+    origin: Vec3,
+    direction: Vec3,
+    box: BoundingBox,
+) -> float | None:
+    """Distance along unit *direction* to the entry point of *box*.
+
+    Returns ``None`` when the ray misses the box. *direction* is
+    normalized internally, so the result is in world units.
+    """
+    direction = direction.normalized
+    t_min = 0.0
+    t_max = float("inf")
+    for o, d, lo, hi in (
+        (origin.x, direction.x, box.min_x, box.max_x),
+        (origin.y, direction.y, box.min_y, box.max_y),
+        (origin.z, direction.z, box.min_z, box.max_z),
+    ):
+        if d == 0:
+            if o < lo or o > hi:
+                return None
+            continue
+        t1 = (lo - o) / d
+        t2 = (hi - o) / d
+        if t1 > t2:
+            t1, t2 = t2, t1
+        t_min = max(t_min, t1)
+        t_max = min(t_max, t2)
+        if t_min > t_max:
+            return None
+    return max(t_min, 0.0) if t_max >= 0 else None
+
+
 def raycast_voxels(
     origin: Vec3,
     direction: Vec3,

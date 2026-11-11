@@ -155,6 +155,8 @@ class _FakeConn:
                 break
         is_table = owner is not None and owner.get("kind") == "crafting_table"
         is_anvil = owner is not None and owner.get("kind") == "anvil"
+        is_furnace = owner is not None and \
+            owner.get("kind") in ("furnace", "blast_furnace", "smoker")
         result_slot = 2 if is_anvil else 0
         if not (0 <= slot <= max_slot):
             return False
@@ -189,16 +191,16 @@ class _FakeConn:
                 self._store_set(store, slot, cur)
                 self.cursor = dict(self._EMPTY_SLOT)
             elif not cur_empty and not it_empty:
-                if cur.get("itemId") == it.get("itemId") and \
-                        cur.get("itemCount", 0) < 64:
-                    room = 64 - cur["itemCount"]
-                    mv = min(room, it["itemCount"])
-                    cur["itemCount"] += mv
-                    it["itemCount"] -= mv
-                    self.cursor = cur if cur["itemCount"] < 64 else \
+                if cur.get("itemId") == it.get("itemId"):
+                    # Place cursor items onto the slot stack (vanilla
+                    # left-click merge direction: cursor -> slot).
+                    room = 64 - it["itemCount"]
+                    mv = min(room, cur["itemCount"])
+                    it["itemCount"] += mv
+                    cur["itemCount"] -= mv
+                    self.cursor = cur if cur["itemCount"] > 0 else \
                         dict(self._EMPTY_SLOT)
-                    self._store_set(store, slot, it if it["itemCount"] > 0 else
-                                   dict(self._EMPTY_SLOT))
+                    self._store_set(store, slot, it)
                 else:
                     self.cursor = it
                     self._store_set(store, slot, cur)
@@ -252,6 +254,8 @@ class _FakeConn:
             self._refresh_window_craft(owner)
         elif is_anvil and owner is not None:
             self._refresh_anvil(owner)
+        if is_furnace and owner is not None:
+            self._maybe_start_smelt(owner)
         return True
 
     def _shift_click(self, store: dict[int, dict[str, Any]],
@@ -419,6 +423,75 @@ class _FakeConn:
                 int(tool["itemId"]), 1))
         else:
             self._store_set(store, 2, dict(self._EMPTY_SLOT))
+
+    # -- minimal furnace simulation ----------------------------------------------
+
+    #: Test-fixture smelt mapping (name -> name); the real mapping is
+    #: server-side data the client never sees.
+    _SMELT_MAP: ClassVar[dict[str, str]] = {
+        "iron_ore": "iron_ingot",
+        "deepslate_iron_ore": "iron_ingot",
+        "raw_iron": "iron_ingot",
+        "gold_ore": "gold_ingot",
+        "raw_gold": "gold_ingot",
+        "copper_ore": "copper_ingot",
+        "raw_copper": "copper_ingot",
+        "cobblestone": "stone",
+        "sand": "glass",
+        "beef": "cooked_beef",
+        "porkchop": "cooked_porkchop",
+        "chicken": "cooked_chicken",
+        "mutton": "cooked_mutton",
+        "potato": "baked_potato",
+        "kelp": "dried_kelp",
+    }
+
+    def _maybe_start_smelt(self, win: dict[str, Any]) -> None:
+        """Start a smelt tick when a furnace window has input+fuel."""
+        task = win.get("smelt_task")
+        if task is not None and not task.done():
+            return
+        store = win["slots"]
+        if self._store_get(store, 0).get("itemCount", 0) > 0 and \
+                self._store_get(store, 1).get("itemCount", 0) > 0:
+            win["smelt_task"] = asyncio.ensure_future(self._smelt_tick(win))
+
+    async def _smelt_tick(self, win: dict[str, Any]) -> None:
+        await asyncio.sleep(0.2)
+        store = win["slots"]
+        inp = dict(self._store_get(store, 0))
+        fuel = dict(self._store_get(store, 1))
+        if inp.get("itemCount", 0) <= 0 or fuel.get("itemCount", 0) <= 0:
+            return
+        from leafish.data.registry import get_gamedata
+        gd = get_gamedata(self.codec.minecraft_version)
+        in_name = gd.item_name(int(inp["itemId"]))
+        out_name = self._SMELT_MAP.get(in_name or "")
+        if out_name is None:
+            return
+        out_id = gd.item_id_by_name(out_name)
+        if out_id is None:
+            return
+        # Consume one input and one fuel item.
+        for slot, data in ((0, inp), (1, fuel)):
+            if data["itemCount"] > 1:
+                data["itemCount"] -= 1
+                self._store_set(store, slot, data)
+            else:
+                self._store_set(store, slot, dict(self._EMPTY_SLOT))
+        # Merge output into slot 2.
+        out = dict(self._store_get(store, 2))
+        if out.get("itemCount", 0) > 0 and out.get("itemId") == out_id \
+                and out["itemCount"] < 64:
+            out["itemCount"] += 1
+            self._store_set(store, 2, out)
+        elif out.get("itemCount", 0) <= 0:
+            self._store_set(store, 2, self._item_dict(out_id, 1))
+        wid = next((w for w, v in self.windows.items() if v is win), None)
+        if wid is not None:
+            win["state_id"] += 1
+            await self.sync_window(wid)
+        self._maybe_start_smelt(win)
 
     async def send(self, name: str, params: dict[str, Any] | None = None) -> None:
         payload = self.codec.encode(self.state, "toClient", name, params or {})
