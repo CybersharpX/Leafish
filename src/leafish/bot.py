@@ -25,6 +25,7 @@ from .modules.client import ClientModule
 from .modules.collector import CollectorModule
 from .modules.containers import ContainerModule, SimpleClick
 from .modules.crafting import CraftingModule
+from .modules.creative import CreativeModule
 from .modules.farming import FarmingModule
 from .modules.fishing import FishingModule
 from .modules.health import HealthModule
@@ -98,6 +99,7 @@ class LeafishBot:
         self.farming = FarmingModule(self)
         self.containers = ContainerModule(self)
         self.anvil = AnvilModule(self)
+        self.creative = CreativeModule(self)
         self.player = PlayerModule(self)
         self.client = ClientModule(self)
         self.simple_click = SimpleClick(self)
