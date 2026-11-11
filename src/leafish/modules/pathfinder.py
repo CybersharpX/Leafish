@@ -153,18 +153,38 @@ class Pathfinder:
     # -- execution ---------------------------------------------------------------------
 
     async def goto(self, goal, timeout: float | None = None) -> bool:
-        """Pathfind to *goal* and walk there. Returns True on arrival."""
+        """Pathfind to *goal* and walk there. Returns True on arrival.
+
+        *goal* may be a position (``BlockPos``/``Vec3``/tuple) or any
+        :class:`~leafish.pathfinder.goals.Goal` — including dynamic goals
+        like ``GoalFollow``, which are re-evaluated and replanned as the
+        target moves.
+        """
+        from ..pathfinder.goals import coerce_goal
+
         entity = self.bot.entity
         if entity is None:
             return False
-        target = _to_block_pos(goal)
+        g = coerce_goal(goal)
         self._stop_event.clear()
-        path = self.find_path(entity.position.floor(), target)
-        if path is None:
-            self.bot.emit("pathfinding_failed", target)
-            return False
-        self.bot.emit("path_update", path)
-        return await self._follow(path, timeout=timeout)
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + (timeout or 30.0)
+        while not g.is_end(entity.position):
+            remaining = deadline - loop.time()
+            if remaining <= 0:
+                await self.bot.stop_moving()
+                return False
+            target = _to_block_pos(g.target_at(entity.position))
+            path = self.find_path(entity.position.floor(), target)
+            if path is None:
+                self.bot.emit("pathfinding_failed", target)
+                await self.bot.stop_moving()
+                return False
+            self.bot.emit("path_update", path)
+            if not await self._follow(path, timeout=remaining):
+                return False
+        await self.bot.stop_moving()
+        return True
 
     async def _follow(self, path: list[BlockPos], timeout: float | None = None) -> bool:
         import asyncio
