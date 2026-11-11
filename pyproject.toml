@@ -24,6 +24,7 @@ classifiers = [
 dependencies = [
     "httpx>=0.27",
     "cryptography>=42",
+    "protolib>=0.4",
 ]
 
 [project.optional-dependencies]
@@ -60,7 +61,7 @@ src = ["src", "tests"]
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "ASYNC", "B", "SIM", "RUF"]
-ignore = ["E501"]
+ignore = ["E501", "ASYNC109"]
 
 [tool.ty.environment]
 python-version = "3.11"

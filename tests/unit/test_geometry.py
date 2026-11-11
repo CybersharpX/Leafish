@@ -1,6 +1,5 @@
-import pytest
 
-from leafish.utils.geometry import BoundingBox, RaycastHit, raycast_voxels
+from leafish.utils.geometry import BoundingBox, raycast_voxels
 from leafish.utils.vectors import BlockPos, Vec3
 
 

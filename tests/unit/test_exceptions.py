@@ -1,4 +1,3 @@
-import pytest
 
 from leafish.exceptions import (
     AuthenticationError,

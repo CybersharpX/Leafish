@@ -99,10 +99,7 @@ def raycast_voxels(
     def _t_max(axis_pos: float, d: float, step: int) -> float:
         if d == 0:
             return float("inf")
-        if step > 0:
-            boundary = (int(axis_pos // 1) + 1)
-        else:
-            boundary = int(axis_pos // 1)
+        boundary = int(axis_pos // 1) + 1 if step > 0 else int(axis_pos // 1)
         return (boundary - axis_pos) / d
 
     t_max_x = _t_max(x, dx, step_x)

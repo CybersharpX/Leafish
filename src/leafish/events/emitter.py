@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 import inspect
 import logging
-from collections.abc import Awaitable, Callable
+from collections.abc import Callable, Coroutine
 from typing import Any, TypeVar
 
 log = logging.getLogger("leafish.events")
@@ -118,7 +118,7 @@ class EventEmitter:
         for handler in handlers:
             try:
                 result = handler(*args, **kwargs)
-            except Exception as exc:  # noqa: BLE001 - isolation boundary
+            except Exception as exc:
                 self._report_error(event, handler, exc)
                 continue
             if inspect.isawaitable(result):
@@ -140,10 +140,10 @@ class EventEmitter:
                 result = handler(*args, **kwargs)
                 if inspect.isawaitable(result):
                     await result
-            except Exception as exc:  # noqa: BLE001 - isolation boundary
+            except Exception as exc:
                 self._report_error(event, handler, exc)
 
-    def _schedule(self, coro: Awaitable, event: str, handler: Handler) -> None:
+    def _schedule(self, coro: Coroutine[Any, Any, Any], event: str, handler: Handler) -> None:
         try:
             loop = asyncio.get_running_loop()
         except RuntimeError:
@@ -154,7 +154,7 @@ class EventEmitter:
         async def _runner() -> None:
             try:
                 await coro
-            except Exception as exc:  # noqa: BLE001
+            except Exception as exc:
                 self._report_error(event, handler, exc)
 
         task = loop.create_task(_runner())
@@ -172,5 +172,5 @@ class EventEmitter:
                     result = eh(event, name, exc)
                     if inspect.isawaitable(result):
                         self._schedule(result, "error", eh)
-                except Exception:  # noqa: BLE001 - never recurse
+                except Exception:
                     log.exception("Error handler itself failed")

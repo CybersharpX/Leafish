@@ -1,7 +1,5 @@
 import io
 
-import pytest
-
 from leafish.utils import nbt
 
 
@@ -14,7 +12,6 @@ def test_binary_roundtrip_compound():
         "flags": {"onGround": nbt.NBTByte(1)},
     }
     data = nbt.write_compound_typed(compound)
-    buf = io.BytesIO(data + b"\x00")  # trailing TAG_End already written; fine
     parsed = nbt.read_compound(io.BytesIO(data))
     assert parsed["name"] == "Steve"
     assert isinstance(parsed["health"], int)
