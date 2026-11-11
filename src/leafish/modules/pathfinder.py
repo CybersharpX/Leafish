@@ -8,6 +8,7 @@ corner-cutting are not yet supported.
 
 from __future__ import annotations
 
+import asyncio
 import heapq
 import logging
 import math
@@ -41,6 +42,7 @@ class Pathfinder:
         self.max_distance = 64.0
         self.allow_jump = True
         self._goto_task = None
+        self._stop_event = asyncio.Event()
 
     # -- walkability ---------------------------------------------------------------
 
@@ -156,6 +158,7 @@ class Pathfinder:
         if entity is None:
             return False
         target = _to_block_pos(goal)
+        self._stop_event.clear()
         path = self.find_path(entity.position.floor(), target)
         if path is None:
             self.bot.emit("pathfinding_failed", target)
@@ -174,6 +177,9 @@ class Pathfinder:
         stuck_ticks = 0
 
         while idx < len(path):
+            if self._stop_event.is_set():
+                await self.bot.stop_moving()
+                return False
             if asyncio.get_running_loop().time() > deadline:
                 await self.bot.stop_moving()
                 return False
@@ -217,6 +223,7 @@ class Pathfinder:
         return True
 
     async def stop(self) -> None:
+        self._stop_event.set()
         await self.bot.stop_moving()
 
 

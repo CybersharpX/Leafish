@@ -92,7 +92,7 @@ class Inventory:
         """Select hotbar slot *slot* (0-8)."""
         if not 0 <= slot <= 8:
             raise InventoryError(f"Hotbar slot out of range: {slot}")
-        await self.bot._send_play("held_item_slot", {"slot": slot})
+        await self.bot._send_play("held_item_slot", {"slotId": slot})
         self.held_slot = slot
 
     async def toss(self, slot: int | Item, count: int | None = None) -> None:

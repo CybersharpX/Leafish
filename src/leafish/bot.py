@@ -19,10 +19,12 @@ from .inventory.inventory import Inventory
 from .modules.actions import ActionsModule
 from .modules.chat import ChatModule
 from .modules.crafting import CraftingModule
+from .modules.fishing import FishingModule
 from .modules.health import HealthModule
 from .modules.movement import CONTROL_STATES, MovementModule
 from .modules.pathfinder import Pathfinder
 from .modules.physics import PhysicsEngine
+from .modules.pvp import PVPModule
 from .protocol.protodef import ProtocolCodec
 from .protocol.session import ClientSession
 from .utils.text import component_to_text, nbt_to_python
@@ -68,6 +70,8 @@ class LeafishBot:
         self.actions = ActionsModule(self)
         self.crafting = CraftingModule(self)
         self.pathfinder = Pathfinder(self)
+        self.pvp = PVPModule(self)
+        self.fishing = FishingModule(self)
 
         # Movement control states --------------------------------------------
         self.control_states: dict[str, bool] = {c: False for c in CONTROL_STATES}
@@ -709,6 +713,10 @@ class LeafishBot:
                     crafting_table: bool = False) -> int:
         """Craft *count* of *item_name*; returns items actually crafted."""
         return await self.crafting.craft(item_name, count, crafting_table)
+
+    async def fish(self, timeout: float = 60.0, **opts) -> bool:
+        """Cast the fishing rod and catch one fish."""
+        return await self.fishing.fish(timeout, **opts)
 
     # -- world actions ------------------------------------------------------------------
 

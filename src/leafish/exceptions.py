@@ -73,5 +73,9 @@ class CraftingError(LeafishError):
     """A crafting operation failed."""
 
 
+class FishingError(LeafishError):
+    """A fishing operation failed."""
+
+
 class PluginError(LeafishError):
     """A plugin failed to load or execute."""
