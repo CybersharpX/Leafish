@@ -1,0 +1,10 @@
+site_name: Leafish
+site_description: A pure Python, asynchronous Minecraft Java Edition bot framework.
+repo_url: https://github.com/leafish/leafish
+theme:
+  name: material
+  palette:
+    primary: teal
+nav:
+  - Home: index.md
+  - API: api/index.md
