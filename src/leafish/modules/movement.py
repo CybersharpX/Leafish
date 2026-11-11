@@ -62,6 +62,36 @@ class MovementModule:
             raise ValueError(f"Unknown control state '{control}'")
         self.bot.control_states[control] = value
         await self._sync_sprint_state()
+        await self._send_input_packet()
+
+    def get_control_state(self, control: str) -> bool:
+        """Return whether *control* is currently enabled."""
+        return bool(self.bot.control_states.get(control, False))
+
+    async def clear_control_states(self) -> None:
+        """Disable every movement control at once."""
+        for control in CONTROL_STATES:
+            self.bot.control_states[control] = False
+        self._was_sprinting = False
+        await self._send_input_packet()
+
+    async def _send_input_packet(self) -> None:
+        """Mirror control states into a ``player_input`` packet.
+
+        Modern servers use this packet for sneak/sprint/jump input in
+        addition to the legacy movement packets.
+        """
+        controls = self.bot.control_states
+        inputs = {
+            "forward": bool(controls.get("forward")),
+            "backward": bool(controls.get("backward")),
+            "left": bool(controls.get("left")),
+            "right": bool(controls.get("right")),
+            "jump": bool(controls.get("jump")),
+            "shift": bool(controls.get("sneak")),
+            "sprint": bool(controls.get("sprint")),
+        }
+        await self.bot._send_play("player_input", {"inputs": inputs})
 
     async def _sync_sprint_state(self) -> None:
         """Notify the server of sprint state changes via entity_action."""

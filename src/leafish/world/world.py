@@ -121,6 +121,8 @@ class World:
         self.dimension_types: dict[str, dict[str, Any]] = {}
         self.dimensions: dict[str, dict[str, Any]] = {}
         self.biome_count: int = 0
+        self.spawn_point: BlockPos | None = None
+        """World spawn position (from ``spawn_position``/respawn data)."""
 
     # -- dimensions ---------------------------------------------------------------
 

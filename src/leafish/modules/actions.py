@@ -6,7 +6,7 @@ import asyncio
 import contextlib
 import logging
 import time
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from ..exceptions import DiggingError, InventoryError, LeafishError
 from ..inventory.inventory import HOTBAR_END, HOTBAR_START
@@ -365,6 +365,158 @@ class ActionsModule:
             if d < best_d:
                 best_d, best_face = d, face
         return best_face
+
+    # -- item use -----------------------------------------------------------------
+
+    async def use_item(self, hand: int = 0) -> None:
+        """Send ``use_item`` (right-click with empty hand / item use).
+
+        *hand* is 0 for main hand, 1 for off hand.
+        """
+        entity = self.bot.entity
+        yaw = entity.yaw if entity is not None else 0.0
+        pitch = entity.pitch if entity is not None else 0.0
+        self._use_sequence = (self._use_sequence + 1) & 0x7FFFFFFF
+        await self.bot._send_play(
+            "use_item",
+            {
+                "hand": hand,
+                "sequence": self._use_sequence,
+                "rotation": {"x": yaw, "y": pitch},
+            },
+        )
+        self.bot.emit("item_use", hand)
+
+    async def activate_item(self, off_hand: bool = False) -> None:
+        """Start using the held item (eat, draw bow, ...).
+
+        Sets :attr:`bot.using_held_item` until :meth:`deactivate_item`.
+        """
+        hand = 1 if off_hand else 0
+        await self.use_item(hand)
+        self._activated_hand = hand
+        self.bot.using_held_item = True
+        self.bot.emit("item_activate", hand)
+
+    async def deactivate_item(self) -> None:
+        """Stop using the held item (release bow, finish eating)."""
+        hand = getattr(self, "_activated_hand", 0)
+        await self.use_item(hand)
+        self._activated_hand = None
+        self.bot.using_held_item = False
+        self.bot.emit("item_deactivate", hand)
+
+    async def consume(self) -> None:
+        """Eat/drink the held item (convenience wrapper for item use)."""
+        await self.activate_item()
+        await self.deactivate_item()
+
+    # -- entity interaction ---------------------------------------------------------
+
+    async def use_on(self, entity, point=None, hand: int = 0) -> None:
+        """Interact with *entity* (right-click; mounts vehicles, feeds
+        animals, opens villager trades).
+
+        When *point* (a Vec3 in entity-local 0..1 space or world space) is
+        given, an ``interact_at`` packet is sent instead.
+        """
+        if entity is None:
+            raise LeafishError("use_on() requires an entity")
+        sneaking = bool(self.bot.control_states.get("sneak"))
+        if point is None:
+            params: dict[str, Any] = {
+                "target": entity.id,
+                "mouse": 0,
+                "hand": hand,
+                "sneaking": sneaking,
+            }
+        else:
+            rel = self._entity_local_point(entity, point)
+            params = {
+                "target": entity.id,
+                "mouse": 2,
+                "x": rel.x,
+                "y": rel.y,
+                "z": rel.z,
+                "hand": hand,
+                "sneaking": sneaking,
+            }
+        await self.bot._send_play("use_entity", params)
+        self.bot.emit("entity_interact", entity)
+
+    @staticmethod
+    def _entity_local_point(entity, point) -> Vec3:
+        """Convert a world-space point to entity-local 0..1 coordinates."""
+        if isinstance(point, Vec3):
+            pos = entity.position
+            # Heuristic: treat input as world position; convert to local.
+            lx = (point.x - pos.x) / max(entity.width, 0.1)
+            ly = (point.y - pos.y) / max(entity.height, 0.1)
+            lz = (point.z - pos.z) / max(entity.width, 0.1)
+            return Vec3(
+                min(max(lx, 0.0), 1.0),
+                min(max(ly, 0.0), 1.0),
+                min(max(lz, 0.0), 1.0),
+            )
+        if isinstance(point, (tuple, list)) and len(point) == 3:
+            return Vec3(*[min(max(float(c), 0.0), 1.0) for c in point])
+        raise LeafishError(f"Invalid interaction point: {point!r}")
+
+    async def activate_entity(self, entity, hand: int = 0) -> None:
+        """Right-click *entity* (alias for :meth:`use_on`)."""
+        await self.use_on(entity, point=None, hand=hand)
+
+    async def activate_entity_at(self, entity, position, hand: int = 0) -> None:
+        """Right-click *entity* at a specific local position."""
+        await self.use_on(entity, point=position, hand=hand)
+
+    async def activate_block(self, reference_block, direction=None,
+                             cursor_pos=None) -> None:
+        """Right-click *reference_block* with an explicit face/cursor.
+
+        Unlike :meth:`interact_block` this accepts a precise cursor
+        position (0..1 within the face) for pressure plates, buttons and
+        entity-bound blocks.
+        """
+        pos = self._resolve_pos(reference_block)
+        ref = self.bot.world.block_at(pos)
+        if ref is None:
+            raise LeafishError(f"Cannot interact with unloaded block at {pos}")
+        face_index = self._face_index(direction if direction is not None else 1)
+        normal = FACE_DIRECTIONS[face_index]
+        await self._look_at_block(pos, face_index)
+        seq = self._next_sequence()
+        if cursor_pos is None:
+            cursor = Vec3(0.5 + normal.x * 0.5, 0.5 + normal.y * 0.5,
+                          0.5 + normal.z * 0.5)
+        elif isinstance(cursor_pos, Vec3):
+            cursor = cursor_pos
+        else:
+            cursor = Vec3(*cursor_pos)
+        rel = cursor - Vec3(pos.x, pos.y, pos.z)
+        await self.bot._send_play(
+            "block_place",
+            {
+                "hand": 0,
+                "location": {"x": pos.x, "y": pos.y, "z": pos.z},
+                "direction": face_index,
+                "cursorX": min(max(rel.x, 0.0), 1.0),
+                "cursorY": min(max(rel.y, 0.0), 1.0),
+                "cursorZ": min(max(rel.z, 0.0), 1.0),
+                "insideBlock": False,
+                "worldBorderHit": False,
+                "sequence": seq,
+            },
+        )
+        self.bot.emit("block_interact", pos, face_index)
+
+    async def place_entity(self, entity, face=None) -> None:
+        """Place the held block against the block beneath *entity*."""
+        pos = getattr(entity, "position", None)
+        if pos is None:
+            raise LeafishError("place_entity() requires an entity")
+        below = pos.floor().offset(0, -1, 0)
+        await self.place_block(below, face if face is not None else 1)
 
     # -- combat ---------------------------------------------------------------------
 

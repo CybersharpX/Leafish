@@ -19,6 +19,8 @@ from ..inventory.item import Item
 if TYPE_CHECKING:
     from ..bot import LeafishBot
 
+__all__ = ["ContainerModule", "SimpleClick", "WindowState"]
+
 _STATE_TIMEOUT = 1.0
 
 
@@ -49,6 +51,21 @@ class WindowState:
         return range(max(0, start), self.size)
 
 
+class SimpleClick:
+    """Convenience left/right mouse clicks in the player inventory window."""
+
+    def __init__(self, bot: LeafishBot) -> None:
+        self.bot = bot
+
+    async def left_mouse(self, slot: int) -> None:
+        """Left-click (pick up / place) *slot* in window 0."""
+        await self.bot.containers.click(0, slot, button=0, mode=0)
+
+    async def right_mouse(self, slot: int) -> None:
+        """Right-click (place one / pick half) *slot* in window 0."""
+        await self.bot.containers.click(0, slot, button=1, mode=0)
+
+
 class ContainerModule:
     """Manages open windows other than the player inventory (window 0)."""
 
@@ -62,6 +79,8 @@ class ContainerModule:
         return self.windows.get(window_id)
 
     def state_id(self, window_id: int) -> int:
+        if window_id == 0:
+            return self.bot.inventory_state_id
         win = self.windows.get(window_id)
         return win.state_id if win is not None else 0
 

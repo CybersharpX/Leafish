@@ -50,11 +50,12 @@ class PhysicsEngine:
         self.on_ground = True
         self._tick_task: asyncio.Task | None = None
         self.horizontal_collision = False
-        self.enabled = False
+        self.enabled = True
 
     # -- lifecycle ---------------------------------------------------------------
 
     def start(self) -> None:
+        self.enabled = True
         if self._tick_task is None or self._tick_task.done():
             self._tick_task = asyncio.create_task(self._tick_loop(), name="leafish-physics")
 
@@ -150,7 +151,7 @@ class PhysicsEngine:
         """Advance physics one tick and send movement if needed."""
         bot = self.bot
         entity = bot.entity
-        if entity is None:
+        if entity is None or not self.enabled:
             return
 
         controls = bot.control_states

@@ -19,8 +19,9 @@ from .inventory.inventory import Inventory
 from .modules.actions import ActionsModule
 from .modules.anvil import AnvilModule
 from .modules.chat import ChatModule
+from .modules.client import ClientModule
 from .modules.collector import CollectorModule
-from .modules.containers import ContainerModule
+from .modules.containers import ContainerModule, SimpleClick
 from .modules.crafting import CraftingModule
 from .modules.farming import FarmingModule
 from .modules.fishing import FishingModule
@@ -28,7 +29,15 @@ from .modules.health import HealthModule
 from .modules.movement import CONTROL_STATES, MovementModule
 from .modules.pathfinder import Pathfinder
 from .modules.physics import PhysicsEngine
+from .modules.player import PlayerModule
 from .modules.pvp import PVPModule
+from .modules.state import (
+    AbilitiesInfo,
+    ExperienceInfo,
+    GameInfo,
+    SettingsInfo,
+    TimeInfo,
+)
 from .plugins import PluginManager
 from .protocol.protodef import ProtocolCodec
 from .protocol.session import ClientSession
@@ -70,7 +79,7 @@ class LeafishBot:
         self.inventory = Inventory(self)
         self.physics = PhysicsEngine(self)
         self.movement = MovementModule(self)
-        self.health = HealthModule(self)
+        self.vitals = HealthModule(self)
         self.chat_module = ChatModule(self)
         self.actions = ActionsModule(self)
         self.crafting = CraftingModule(self)
@@ -81,10 +90,24 @@ class LeafishBot:
         self.farming = FarmingModule(self)
         self.containers = ContainerModule(self)
         self.anvil = AnvilModule(self)
+        self.player = PlayerModule(self)
+        self.client = ClientModule(self)
+        self.simple_click = SimpleClick(self)
         self.plugins = PluginManager(self)
+
+        # State objects -----------------------------------------------------
+        self.chat_patterns: dict[str, dict] = {}
+        self.feature_flags: set[str] | None = None
+        self._game = GameInfo()
+        self._time = TimeInfo()
+        self._abilities = AbilitiesInfo()
+        self._experience = ExperienceInfo()
+        self.settings = SettingsInfo(view_distance=config.view_distance)
 
         # Movement control states --------------------------------------------
         self.control_states: dict[str, bool] = {c: False for c in CONTROL_STATES}
+        self.using_held_item: bool = False
+        """Whether the held item is currently activated (bow drawn, eating)."""
 
         # Window state --------------------------------------------------------
         self.current_window_id: int | None = None
@@ -192,6 +215,8 @@ class LeafishBot:
         if state == "configuration":
             if name == "registry_data":
                 self._on_registry_data(params)
+            elif name == "feature_flags":
+                self.feature_flags = set(params.get("features") or [])
             return
         if state != "play":
             return
@@ -248,9 +273,18 @@ class LeafishBot:
 
     def _packet_login(self, params: dict[str, Any]) -> None:
         self.entity_id = params.get("entityId")
-        ws = params.get("worldState", {})
+        ws = params.get("worldState", params.get("commonPlayerSpawnInfo", {}))
         self.game_mode = ws.get("gamemode")
+        self._game.game_mode = self.game_mode
+        self._game.hardcore = bool(params.get("isHardcore", False))
+        self._game.max_players = params.get("maxPlayers")
+        self._game.view_distance = params.get("viewDistance")
+        self._game.simulation_distance = params.get("simulationDistance")
+        names = params.get("worldNames") or []
+        if names:
+            self._game.level_type = names[0]
         self.world.apply_dimension(ws.get("name"), ws.get("dimension"))
+        self._game.dimension = ws.get("name") or self.world.dimension
         if self.entity is None and self.entity_id is not None:
             self.entity = Player(id=self.entity_id, uuid=self.uuid, name=self.username)
 
@@ -307,10 +341,16 @@ class LeafishBot:
     def _packet_respawn(self, params: dict[str, Any]) -> None:
         ws = params.get("worldState", params.get("commonPlayerSpawnInfo", {}))
         self.game_mode = ws.get("gamemode")
+        self._game.game_mode = self.game_mode
+        self._game.dimension = ws.get("name")
         self.world.apply_dimension(ws.get("name"), ws.get("dimension"))
+        self._game.min_y = self.world.min_y
+        self._game.height = self.world.height
         self.world.chunks.clear()
         self.entities.clear()
+        self.player._sleeping = False
         self.emit("respawn")
+        self.emit("spawn_reset")
         self.spawned = False
         self._first_position_received = False
 
@@ -320,6 +360,7 @@ class LeafishBot:
         message = params.get("plainMessage") or ""
         self.emit("chat", username, message)
         self.emit("player_chat", username, message, params)
+        self._dispatch_chat_patterns(username, message)
 
     def _packet_system_chat(self, params: dict[str, Any]) -> None:
         text = component_to_text(nbt_to_python(params.get("content")))
@@ -330,6 +371,22 @@ class LeafishBot:
         message = component_to_text(nbt_to_python(params.get("message")))
         name = component_to_text(nbt_to_python(params.get("name"))) or None
         self.emit("chat", name, message)
+        self._dispatch_chat_patterns(name, message)
+
+    def _dispatch_chat_patterns(self, username, message: str) -> None:
+        """Emit ``chat:<name>`` for registered chat patterns."""
+        for name, spec in self.chat_patterns.items():
+            chat_type = spec.get("chatType", "chat")
+            if chat_type != "chat":
+                continue
+            patterns = spec.get("patterns") or [spec.get("pattern")]
+            for pattern in patterns:
+                if pattern is None:
+                    continue
+                m = pattern.search(message or "")
+                if m is not None:
+                    self.emit(f"chat:{name}", username, message, m)
+                    break
 
     def _packet_player_info(self, params: dict[str, Any]) -> None:
         action = params.get("action") or {}
@@ -373,17 +430,21 @@ class LeafishBot:
         self.emit("playerlist_header", params)
 
     def _packet_update_health(self, params: dict[str, Any]) -> None:
-        old = self.health.health
-        self.health.update_health(params)
-        self.emit("health", self.health.health, self.health.food)
-        self.emit("food", self.health.food, self.health.food_saturation)
-        if old != self.health.health:
+        old = self.vitals.health
+        self.vitals.update_health(params)
+        self.emit("health", self.vitals.health, self.vitals.food)
+        self.emit("food", self.vitals.food, self.vitals.food_saturation)
+        if old != self.vitals.health:
             self.emit("entity_hurt", self.entity)
 
     def _packet_experience(self, params: dict[str, Any]) -> None:
-        self.health.update_experience(params)
-        self.emit("experience", self.health.experience_level,
-                  self.health.experience_progress)
+        self.vitals.update_experience(params)
+        self._experience.level = self.vitals.experience_level
+        self._experience.progress = self.vitals.experience_progress
+        self._experience.points = self.vitals.experience_total
+        self._experience.total = self.vitals.experience_total
+        self.emit("experience", self.vitals.experience_level,
+                  self.vitals.experience_progress)
 
     def _packet_held_item_slot(self, params: dict[str, Any]) -> None:
         # Clientbound slot is the hotbar index (0-8) in modern versions.
@@ -603,14 +664,32 @@ class LeafishBot:
             self.emit("weather_update", self.world.weather)
 
     def _packet_update_time(self, params: dict[str, Any]) -> None:
-        self.world.set_time(
-            params.get("age", 0), params.get("time", 0),
-            bool(params.get("tickDayTime", False)),
-        )
+        age = int(params.get("age", 0))
+        day_time = int(params.get("time", 0))
+        tick = bool(params.get("tickDayTime", False))
+        self.world.set_time(age, day_time, tick)
+        self._time.big_time = age
+        self._time.time = day_time
+        self._time.tick_day_time = tick
+        self._time.do_daylight_cycle = tick
         self.emit("time_update", self.world.time, self.world.time_of_day)
+        self.emit("time", self._time)
 
     def _packet_abilities(self, params: dict[str, Any]) -> None:
+        flags = params.get("flags", 0)
+        # Abilities flags byte (i8): bit0 invulnerable, bit1 flying,
+        # bit2 allow-flying, bit3 creative/instabuild, bit4 god-mode.
+        ab = self._abilities
+        value = int(flags) if isinstance(flags, int) else 0
+        ab.invulnerable = bool(value & 0x01)
+        ab.flying = bool(value & 0x02)
+        ab.may_fly = bool(value & 0x04)
+        ab.instabuild = bool(value & 0x08)
+        ab.may_build = True  # no dedicated flag in modern protocol
+        ab.flying_speed = float(params.get("flyingSpeed", ab.flying_speed))
+        ab.walking_speed = float(params.get("walkingSpeed", ab.walking_speed))
         self.emit("abilities", params)
+        self.emit("abilities_update", ab)
 
     def _packet_entity_status(self, params: dict[str, Any]) -> None:
         self.emit("entity_status", params.get("entityId"), params.get("entityStatus"))
@@ -625,6 +704,7 @@ class LeafishBot:
         self.emit("entity_update_attributes", params)
 
     def _packet_explosion(self, params: dict[str, Any]) -> None:
+        self.client.record_explosion(params)
         self.emit("explosion", params)
 
     def _packet_damage_event(self, params: dict[str, Any]) -> None:
@@ -654,7 +734,33 @@ class LeafishBot:
         self.emit("update_view_position", params)
 
     def _packet_spawn_position(self, params: dict[str, Any]) -> None:
+        # RespawnData: {globalPos: {dimension, pos: {x,y,z}}, yaw, pitch}
+        gp = params.get("globalPos") or {}
+        pos = gp.get("pos") or {}
+        with contextlib.suppress(AttributeError, TypeError, ValueError):
+            self.world.spawn_point = BlockPos(
+                int(pos.get("x", 0)), int(pos.get("y", 0)), int(pos.get("z", 0))
+            )
         self.emit("spawn_position", params)
+
+    def _packet_difficulty(self, params: dict[str, Any]) -> None:
+        self._game.difficulty = params.get("difficulty")
+        self._game.extra["difficulty_locked"] = params.get("difficultyLocked")
+        self.emit("difficulty", params.get("difficulty"))
+
+    def _packet_server_data(self, params: dict[str, Any]) -> None:
+        motd = component_to_text(nbt_to_python(params.get("motd")))
+        if motd:
+            self._game.server_brand = motd
+        self.emit("server_data", params)
+
+    def _packet_tab_complete(self, params: dict[str, Any]) -> None:
+        self.emit("tab_complete_response", params)
+
+    def _packet_open_sign_entity(self, params: dict[str, Any]) -> None:
+        pos = _pos_from_bitfield(params.get("location"))
+        self.emit("open_sign_entity", params)
+        self.emit("sign_open", pos)
 
     def _packet_chunk_batch_start(self, params: dict[str, Any]) -> None:
         self.emit("chunk_batch_start")
@@ -876,17 +982,362 @@ class LeafishBot:
     async def equip(self, item, destination: str | None = None):
         await self.actions.equip(item, destination)
 
+    async def unequip(self, destination: str = "hand"):
+        """Move the item in *destination* back into the inventory."""
+        await self.inventory.unequip(destination)
+
+    # -- item use ------------------------------------------------------------------
+
+    async def use_item(self, hand: int = 0) -> None:
+        """Send ``use_item`` with the held item (or empty hand)."""
+        await self.actions.use_item(hand)
+
     async def consume(self):
-        raise LeafishError("consume() is not implemented yet")
+        """Eat/drink the held item."""
+        await self.actions.consume()
 
-    async def activate_item(self):
-        raise LeafishError("activate_item() is not implemented yet")
+    async def activate_item(self, off_hand: bool = False) -> None:
+        """Start using the held item (bow, food, ...)."""
+        await self.actions.activate_item(off_hand=off_hand)
 
-    async def deactivate_item(self):
-        raise LeafishError("deactivate_item() is not implemented yet")
+    async def deactivate_item(self) -> None:
+        """Stop using the held item."""
+        await self.actions.deactivate_item()
+
+    # -- entity / block interaction ---------------------------------------------------
+
+    async def use_on(self, entity, point=None, hand: int = 0) -> None:
+        """Right-click *entity* (mount, feed, trade, ...)."""
+        await self.actions.use_on(entity, point=point, hand=hand)
+
+    async def activate_entity(self, entity, hand: int = 0) -> None:
+        await self.actions.activate_entity(entity, hand=hand)
+
+    async def activate_entity_at(self, entity, position, hand: int = 0) -> None:
+        await self.actions.activate_entity_at(entity, position, hand=hand)
+
+    async def activate_block(self, block, direction=None, cursor_pos=None) -> None:
+        """Right-click a block with explicit face/cursor position."""
+        await self.actions.activate_block(block, direction, cursor_pos)
+
+    async def place_entity(self, entity, face=None) -> None:
+        """Place the held block against the block under *entity*."""
+        await self.actions.place_entity(entity, face)
+
+    # -- player state ------------------------------------------------------------------
+
+    async def respawn(self) -> None:
+        """Request respawn (after death or dimension change)."""
+        await self.player.respawn()
+
+    async def sleep(self, bed_block) -> None:
+        """Sleep in *bed_block*."""
+        await self.player.sleep(bed_block)
+
+    async def wake(self) -> None:
+        """Wake up from sleep."""
+        await self.player.wake()
+
+    @property
+    def is_sleeping(self) -> bool:
+        """Whether the bot believes it is sleeping."""
+        return self.player.is_abed
+
+    async def is_abed(self, bed_block=None) -> bool:
+        """Whether the bot is currently sleeping.
+
+        When *bed_block* is given, also verifies the bot is near that bed.
+        """
+        if not self.player.is_abed:
+            return False
+        if bed_block is None:
+            return True
+        pos = getattr(bed_block, "position", bed_block)
+        entity = self.entity
+        if entity is None or pos is None:
+            return False
+        p = pos if isinstance(pos, Vec3) else Vec3(*pos)
+        return entity.position.distance_to(p) < 4.0
+
+    async def elytra_fly(self) -> None:
+        """Deploy elytra (requires elytra equipped and airborne)."""
+        await self.player.elytra_fly()
+
+    async def mount(self, entity) -> None:
+        """Mount *entity* (boat, minecart, horse, ...)."""
+        await self.player.mount(entity)
+
+    async def dismount(self) -> None:
+        """Dismount the current vehicle."""
+        await self.player.dismount()
+
+    async def move_vehicle(self, left: float = 0.0, forward: float = 0.0) -> None:
+        """Steer the mounted vehicle."""
+        await self.player.move_vehicle(left, forward)
+
+    # -- inventory helpers ---------------------------------------------------------------
+
+    async def toss(self, item, count: int | None = None) -> None:
+        """Drop *count* items (or the whole stack) from *item*'s slot."""
+        await self.inventory.toss(item, count)
+
+    async def toss_stack(self, item) -> None:
+        """Drop the entire stack held by *item*'s slot."""
+        await self.inventory.toss_stack(item)
+
+    async def move_slot_item(self, source_slot: int, dest_slot: int) -> None:
+        await self.inventory.move_slot_item(source_slot, dest_slot)
+
+    async def put_away(self, slot: int) -> None:
+        await self.inventory.put_away(slot)
+
+    async def transfer(self, options: dict | None = None) -> None:
+        await self.inventory.transfer(options)
+
+    async def put_selected_item_range(self, start: int, end: int,
+                                      window_id: int | None = None,
+                                      slot: int | None = None) -> None:
+        await self.inventory.put_selected_item_range(
+            start, end, window_id=window_id, slot=slot
+        )
+
+    # -- digging / item info ---------------------------------------------------------------
+
+    def dig_time(self, block_or_pos) -> float:
+        """Estimated digging time in seconds for a block/position."""
+        return self.actions.dig_time(block_or_pos)
+
+    # -- client helpers ---------------------------------------------------------------------
+
+    async def tab_complete(self, text: str, assume_command: bool = False,
+                           timeout: float = 5.0) -> list[str]:
+        """Request chat/command tab-completion; returns matches."""
+        return await self.client.tab_complete(
+            text, assume_command=assume_command, timeout=timeout
+        )
+
+    async def accept_resource_pack(self) -> None:
+        await self.client.accept_resource_pack()
+
+    async def deny_resource_pack(self) -> None:
+        await self.client.deny_resource_pack()
+
+    async def update_sign(self, block, text, back: bool = False,
+                          timeout: float = 5.0) -> bool:
+        """Write text onto a sign block. Returns True on success."""
+        return await self.client.update_sign(block, text, back=back,
+                                             timeout=timeout)
+
+    async def write_book(self, hand: int, pages: list[str],
+                         title: str | None = None) -> None:
+        """Write *pages* into the book held in *hand* (0 or 1)."""
+        await self.client.write_book(hand, pages, title=title)
+
+    async def set_command_block(self, pos, command: str, *, mode: int = 0,
+                                flags: int = 0) -> None:
+        """Update the command block at *pos*."""
+        await self.client.set_command_block(pos, command, mode=mode, flags=flags)
+
+    async def update_held_item(self) -> None:
+        """Re-send the current hotbar selection to the server."""
+        await self.client.update_held_item()
+
+    def support_feature(self, name: str) -> bool:
+        """Whether the server advertised feature flag *name*."""
+        return self.client.support_feature(name)
+
+    def set_settings(self, options: dict) -> None:
+        """Update client settings.
+
+        Recognized keys mirror Mineflayer's ``bot.settings``: ``chat``,
+        ``colorsEnabled``, ``viewDistance``, ``difficulty``,
+        ``skinParts``, ``enableTextFiltering``, ``enableServerListing``,
+        ``particleStatus``, ``mainHand``. Values are stored locally; only
+        settings the protocol can actually change are applied.
+        """
+        mapping = {
+            "chat": "chat_colors",
+            "colorsEnabled": "chat_colors",
+            "viewDistance": "view_distance",
+            "difficulty": "difficulty",
+            "skinParts": "skin_parts",
+            "enableTextFiltering": "enable_text_filtering",
+            "enableServerListing": "enable_server_listing",
+            "particleStatus": "particle_status",
+            "mainHand": "main_hand",
+        }
+        for key, value in options.items():
+            attr = mapping.get(key)
+            if attr is None:
+                continue
+            setattr(self.settings, attr, value)
+            if attr == "view_distance":
+                self.config.view_distance = int(value)
+
+    def has_plugin(self, name: str) -> bool:
+        """Whether a plugin named *name* is loaded."""
+        return name in self.plugins.plugins
+
+    def load_plugins(self, plugins: dict) -> None:
+        """Load several plugins from a ``{name: plugin}`` mapping."""
+        for name, plugin in plugins.items():
+            self.load_plugin(plugin, name=name)
+
+    def get_explosion_damages(self, entity=None, position=None,
+                              radius: float = 0.0,
+                              raw_damages: bool = False) -> dict:
+        """Explosion damage exposure for *entity* (default: the bot)."""
+        return self.client.get_explosion_damages(
+            entity, position, radius, raw_damages
+        )
+
+    # -- chat -------------------------------------------------------------------------
+
+    async def await_message(self, pattern=None, timeout: float = 30.0,
+                            chat_type: str = "chat"):
+        """Wait for an incoming message; see :meth:`ChatModule.await_message`."""
+        return await self.chat_module.await_message(
+            pattern, timeout=timeout, chat_type=chat_type
+        )
+
+    def add_chat_pattern(self, name: str, pattern, chat_type: str = "chat") -> None:
+        self.chat_module.add_chat_pattern(name, pattern, chat_type)
+
+    def add_chat_pattern_set(self, name: str, patterns,
+                             chat_type: str = "chat") -> None:
+        self.chat_module.add_chat_pattern_set(name, patterns, chat_type)
+
+    def remove_chat_pattern(self, name: str) -> None:
+        self.chat_module.remove_chat_pattern(name)
+
+    # -- movement extras ------------------------------------------------------------------
+
+    def get_control_state(self, control: str) -> bool:
+        return self.movement.get_control_state(control)
+
+    async def clear_control_states(self) -> None:
+        await self.movement.clear_control_states()
+
+    async def wait_for_ticks(self, ticks: int) -> None:
+        """Wait approximately *ticks* server ticks (20 ticks = 1s)."""
+        await asyncio.sleep(ticks / 20.0)
+
+    async def wait_for_chunks_to_load(self, timeout: float = 10.0) -> bool:
+        """Wait until the chunk containing the bot is loaded.
+
+        Returns ``True`` when loaded, ``False`` on timeout.
+        """
+        entity = self.entity
+        if entity is None:
+            return False
+        cx = int(entity.position.x) >> 4
+        cz = int(entity.position.z) >> 4
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + timeout
+
+        def loaded() -> bool:
+            return self.world.chunk_at(cx, cz) is not None
+
+        while not loaded():
+            if loop.time() >= deadline:
+                return False
+            fut = self.emitter.wait_for_nowait("chunk_column_load")
+            with contextlib.suppress(TimeoutError):
+                await asyncio.wait_for(
+                    fut, timeout=max(0.05, deadline - loop.time())
+                )
+        return True
 
     async def swing_arm(self):
         await self._send_play("arm_animation", {"hand": 0})
+
+    # -- state properties ---------------------------------------------------------------
+
+    @property
+    def health(self) -> float:
+        """Current health (0-20)."""
+        return self.vitals.health
+
+    @property
+    def food(self) -> int:
+        """Current food level (0-20)."""
+        return self.vitals.food
+
+    @property
+    def food_saturation(self) -> float:
+        return self.vitals.food_saturation
+
+    @property
+    def oxygen_level(self) -> int | None:
+        """Breath/air level; ``None`` — modern servers don't send it."""
+        return None
+
+    @property
+    def experience(self) -> ExperienceInfo:
+        """Experience level/progress/points."""
+        return self._experience
+
+    @property
+    def quick_bar_slot(self) -> int:
+        """Currently selected hotbar slot (0-8)."""
+        return self.inventory.held_slot
+
+    @property
+    def spawn_point(self):
+        """World spawn position (BlockPos) or ``None``."""
+        return self.world.spawn_point
+
+    @property
+    def game(self) -> GameInfo:
+        """Server/game information (dimension, difficulty, game mode...)."""
+        return self._game
+
+    @property
+    def abilities(self) -> AbilitiesInfo:
+        """Player abilities (flying, invulnerable, ...)."""
+        return self._abilities
+
+    @property
+    def time(self) -> TimeInfo:
+        """World clock state."""
+        return self._time
+
+    @property
+    def is_raining(self) -> bool:
+        return bool(self.world.weather.get("raining"))
+
+    @property
+    def rain_state(self) -> float:
+        return float(self.world.weather.get("rain_level", 0.0))
+
+    @property
+    def thunder_state(self) -> float:
+        return float(self.world.weather.get("thunder_level", 0.0))
+
+    @property
+    def physics_enabled(self) -> bool:
+        """Whether client-side physics simulation is running."""
+        return self.physics.enabled
+
+    @physics_enabled.setter
+    def physics_enabled(self, value: bool) -> None:
+        self.physics.enabled = bool(value)
+
+    @property
+    def target_dig_block(self):
+        """The block currently being dug, or ``None``."""
+        pos = self.actions._digging
+        return self.world.block_at(pos) if pos is not None else None
+
+    @property
+    def tablist(self) -> dict:
+        """Player tab-list entries keyed by UUID."""
+        return dict(self.entities.players)
+
+    @property
+    def players(self) -> dict:
+        """All tracked player entities keyed by UUID."""
+        return dict(self.entities.players)
 
 
 # ---------------------------------------------------------------------------
@@ -916,6 +1367,7 @@ class Leafish:
             auth: ``"offline"`` or ``"microsoft"``.
             version: Minecraft version string or ``"latest"``.
         """
+        plugins = kwargs.pop("plugins", None) or {}
         config = BotConfig(host=host, port=port, version=version, **{
             k: v for k, v in kwargs.items() if k in BotConfig.__dataclass_fields__
         })
@@ -940,6 +1392,8 @@ class Leafish:
         config.username = auth_session.username
         bot = LeafishBot(config, auth_session, codec)
         await bot._start()
+        for name, plugin in plugins.items():
+            bot.load_plugin(plugin, name=name)
         bot.emit("connect")
         return bot
 
