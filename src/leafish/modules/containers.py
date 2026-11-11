@@ -151,6 +151,47 @@ class ContainerModule:
         await self.bot._send_play("close_window", {"windowId": wid})
         self.windows.pop(wid, None)
 
+    # -- bulk transfers ---------------------------------------------------------
+
+    async def deposit_all(self, window_id: int,
+                          name: str | None = None) -> int:
+        """Shift-click every matching player-section slot into the
+        container. Returns the number of slots moved."""
+        win = self.windows.get(window_id)
+        if win is None:
+            raise InventoryError(f"Window {window_id} is not open")
+        moved = 0
+        for slot in list(win.player_slots()):
+            item = win.slots.get(slot)
+            if item is None or item.empty:
+                continue
+            if name is not None and item.name != name:
+                continue
+            await self.shift_click(window_id, slot)
+            moved += 1
+        return moved
+
+    async def withdraw(self, window_id: int, name: str,
+                       count: int | None = None) -> int:
+        """Shift-click container slots holding *name* into the player
+        section until *count* items (or all, when ``None``) moved.
+        Returns items moved."""
+        win = self.windows.get(window_id)
+        if win is None:
+            raise InventoryError(f"Window {window_id} is not open")
+        moved = 0
+        for slot in list(win.container_slots()):
+            if count is not None and moved >= count:
+                break
+            item = win.slots.get(slot)
+            if item is None or item.empty or item.name != name:
+                continue
+            want = item.count if count is None else min(
+                item.count, count - moved)
+            await self.shift_click(window_id, slot)
+            moved += want
+        return moved
+
     async def _wait_state(self, window_id: int, prev: int,
                           timeout: float = _STATE_TIMEOUT) -> None:
         deadline = time.monotonic() + timeout

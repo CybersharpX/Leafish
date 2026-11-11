@@ -114,3 +114,37 @@ async def test_craft_in_crafting_table(server):
         assert "stick" not in names
     finally:
         await bot.quit()
+
+
+async def test_anvil_repair(server):
+    """repair() places tool+material in an anvil and takes the result."""
+    gd = get_gamedata("1.21.11")
+    bot = await _spawn_with_planks(server, 0)
+    try:
+        conn = server.connections[0]
+        await conn.debug_open_window(1, 39, "Anvil", kind="anvil")
+        for _ in range(60):
+            if bot.containers.window(1) is not None:
+                break
+            await asyncio.sleep(0.05)
+        win = bot.containers.window(1)
+        assert win is not None
+        assert win.player_offset == 3
+
+        pick = gd.item_by_name("iron_pickaxe")
+        ingot = gd.item_by_name("iron_ingot")
+        assert pick is not None and ingot is not None
+        await conn.debug_set_window_slot(1, 10, _slot(pick["id"], 1))
+        await conn.debug_set_window_slot(1, 11, _slot(ingot["id"], 3))
+        for _ in range(60):
+            if win.slots.get(10) is not None and win.slots.get(11) is not None:
+                break
+            await asyncio.sleep(0.05)
+
+        taken = await asyncio.wait_for(
+            bot.repair("iron_pickaxe", "iron_ingot"), 20)
+        assert taken == 1
+        names = [it.name for it in win.slots.values()]
+        assert "iron_pickaxe" in names
+    finally:
+        await bot.quit()

@@ -154,6 +154,8 @@ class _FakeConn:
                 max_slot = win["size"] - 1
                 break
         is_table = owner is not None and owner.get("kind") == "crafting_table"
+        is_anvil = owner is not None and owner.get("kind") == "anvil"
+        result_slot = 2 if is_anvil else 0
         if not (0 <= slot <= max_slot):
             return False
         if mode == 2:
@@ -172,9 +174,9 @@ class _FakeConn:
             return self._shift_click(store, slot, max_slot)
         if mode != 0:
             return False  # other modes not implemented
-        was_result_take = slot == 0 and \
-            self._store_get(store, 0).get("itemCount", 0) > 0 and \
-            (store is self.inv or is_table)
+        was_result_take = slot == result_slot and \
+            self._store_get(store, result_slot).get("itemCount", 0) > 0 and \
+            (store is self.inv or is_table or is_anvil)
         cur = dict(self.cursor)
         it = dict(self._store_get(store, slot))
         cur_empty = cur.get("itemCount", 0) <= 0
@@ -227,18 +229,29 @@ class _FakeConn:
                     dict(self._EMPTY_SLOT)
         if was_result_take and self.cursor.get("itemCount", 0) > 0:
             # Crafting result taken: consume one of each grid ingredient.
-            grid = (1, 2, 3, 4) if store is self.inv else tuple(range(1, 10))
-            for gs in grid:
-                git = dict(self._store_get(store, gs))
-                if git.get("itemCount", 0) > 1:
-                    git["itemCount"] -= 1
-                    self._store_set(store, gs, git)
-                else:
-                    self._store_set(store, gs, dict(self._EMPTY_SLOT))
+            if is_anvil:
+                for gs in (0, 1):
+                    git = dict(self._store_get(store, gs))
+                    if git.get("itemCount", 0) > 1:
+                        git["itemCount"] -= 1
+                        self._store_set(store, gs, git)
+                    else:
+                        self._store_set(store, gs, dict(self._EMPTY_SLOT))
+            else:
+                grid = (1, 2, 3, 4) if store is self.inv else tuple(range(1, 10))
+                for gs in grid:
+                    git = dict(self._store_get(store, gs))
+                    if git.get("itemCount", 0) > 1:
+                        git["itemCount"] -= 1
+                        self._store_set(store, gs, git)
+                    else:
+                        self._store_set(store, gs, dict(self._EMPTY_SLOT))
         if store is self.inv:
             self._refresh_craft_result()
         elif is_table and owner is not None:
             self._refresh_window_craft(owner)
+        elif is_anvil and owner is not None:
+            self._refresh_anvil(owner)
         return True
 
     def _shift_click(self, store: dict[int, dict[str, Any]],
@@ -394,6 +407,18 @@ class _FakeConn:
         else:
             rid, rc = result
             self._store_set(store, 0, self._item_dict(rid, rc))
+
+    def _refresh_anvil(self, win: dict[str, Any]) -> None:
+        """Recompute anvil result slot 2: non-empty inputs yield the
+        (simplified) repaired tool — same item id as slot 0."""
+        store = win["slots"]
+        tool = self._store_get(store, 0)
+        mat = self._store_get(store, 1)
+        if tool.get("itemCount", 0) > 0 and mat.get("itemCount", 0) > 0:
+            self._store_set(store, 2, self._item_dict(
+                int(tool["itemId"]), 1))
+        else:
+            self._store_set(store, 2, dict(self._EMPTY_SLOT))
 
     async def send(self, name: str, params: dict[str, Any] | None = None) -> None:
         payload = self.codec.encode(self.state, "toClient", name, params or {})

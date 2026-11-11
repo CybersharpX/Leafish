@@ -17,6 +17,7 @@ from .events.emitter import EventEmitter
 from .exceptions import LeafishError
 from .inventory.inventory import Inventory
 from .modules.actions import ActionsModule
+from .modules.anvil import AnvilModule
 from .modules.chat import ChatModule
 from .modules.collector import CollectorModule
 from .modules.containers import ContainerModule
@@ -79,6 +80,7 @@ class LeafishBot:
         self.collector = CollectorModule(self)
         self.farming = FarmingModule(self)
         self.containers = ContainerModule(self)
+        self.anvil = AnvilModule(self)
         self.plugins = PluginManager(self)
 
         # Movement control states --------------------------------------------
@@ -799,6 +801,21 @@ class LeafishBot:
     async def close_window(self, window_id: int | None = None) -> None:
         """Close an open window (defaults to the current one)."""
         await self.containers.close(window_id)
+
+    async def deposit_all(self, window_id: int,
+                          name: str | None = None) -> int:
+        """Shift-click player-inventory items into an open container."""
+        return await self.containers.deposit_all(window_id, name)
+
+    async def withdraw(self, window_id: int, name: str,
+                       count: int | None = None) -> int:
+        """Shift-click items out of a container into the player inventory."""
+        return await self.containers.withdraw(window_id, name, count)
+
+    async def repair(self, item_name: str, material_name: str | None = None,
+                     window_id: int | None = None) -> int:
+        """Repair/rename via an anvil window; returns items taken."""
+        return await self.anvil.repair(item_name, material_name, window_id)
 
     async def interact_block(self, block, face=None) -> None:
         """Right-click a block (open containers, press buttons)."""

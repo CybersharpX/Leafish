@@ -35,5 +35,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   and fake-server shift-click simulation.
 - Crafting tables: 3x3 recipes (e.g. diamond_pickaxe) craft inside an
   open crafting-table window via `bot.craft(..., crafting_table=True)`.
+- Container helpers (`bot.deposit_all`/`bot.withdraw`) and anvil repair
+  (`bot.repair`) with fake-server anvil simulation.
 - Fake protocol server + end-to-end integration tests.
 - `tools/fetch_mcdata.py` for vendoring minecraft-data JSON.

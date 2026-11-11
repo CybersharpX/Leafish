@@ -73,14 +73,17 @@ async def test_chest_window_shift_click(server):
         ]
         assert player_items and player_items[0][1].count == 5
 
-        # Shift-click deposits back into the chest.
-        await bot.shift_click(1, player_items[0][0])
+        # Deposit everything back via deposit_all, then withdraw again.
+        moved = await bot.deposit_all(1, "diamond")
+        assert moved >= 1
         for _ in range(50):
-            chest = win.slots.get(0)
-            if chest is not None and chest.name == "diamond":
+            chest = [win.slots.get(s) for s in range(27)]
+            if any(i is not None and i.name == "diamond" for i in chest):
                 break
             await asyncio.sleep(0.05)
-        assert win.slots[0].name == "diamond"
+        assert any(i is not None and i.name == "diamond" for i in chest)
+        got = await bot.withdraw(1, "diamond")
+        assert got >= 5
 
         # Close the window.
         await bot.close_window(1)
