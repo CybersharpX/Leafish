@@ -36,6 +36,7 @@ dev = [
     "ruff>=0.5",
     "ty>=0.0.1a0",
     "mkdocs>=1.5",
+    "mkdocs-material>=9.5",
     "build>=1.0",
 ]
 

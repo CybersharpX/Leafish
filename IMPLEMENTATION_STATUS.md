@@ -99,7 +99,7 @@ Legend: ✅ done · 🚧 partial · ⬜ not started · ❌ unsupported/known iss
 ## Phase 8 — Compatibility & release
 - ⬜ Additional versions
 - ⬜ Performance pass
-- 🚧 Docs (MkDocs skeleton present; API docs incomplete)
+- ✅ Docs: MkDocs site builds cleanly (index + API reference pages)
 - 🚧 pip-installable package metadata present; not yet released
 
 ## Version compatibility
