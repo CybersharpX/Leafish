@@ -269,6 +269,41 @@ class ActionsModule:
             await self.bot._send_play("arm_animation", {"hand": 0})
         self.bot.emit("block_place", target, held, face_index)
 
+    async def interact_block(self, reference_block, face=None) -> None:
+        """Right-click *reference_block* (open chests, use buttons, ...).
+
+        Sends the same ``block_place`` (use-item-on) packet as placement
+        but does not require a placeable item in hand.
+        """
+        pos = self._resolve_pos(reference_block)
+        ref = self.bot.world.block_at(pos)
+        if ref is None:
+            raise LeafishError(f"Cannot interact with unloaded block at {pos}")
+        if face is None:
+            face = self._placement_face(pos)
+        face_index = self._face_index(face)
+        normal = FACE_DIRECTIONS[face_index]
+        await self._look_at_block(pos, face_index)
+        seq = self._next_sequence()
+        cursor = Vec3(0.5 + normal.x * 0.5, 0.5 + normal.y * 0.5,
+                     0.5 + normal.z * 0.5)
+        rel = cursor - Vec3(pos.x, pos.y, pos.z)
+        await self.bot._send_play(
+            "block_place",
+            {
+                "hand": 0,
+                "location": {"x": pos.x, "y": pos.y, "z": pos.z},
+                "direction": face_index,
+                "cursorX": min(max(rel.x, 0.0), 1.0),
+                "cursorY": min(max(rel.y, 0.0), 1.0),
+                "cursorZ": min(max(rel.z, 0.0), 1.0),
+                "insideBlock": False,
+                "worldBorderHit": False,
+                "sequence": seq,
+            },
+        )
+        self.bot.emit("block_interact", pos, face_index)
+
     def _placement_face(self, pos: BlockPos) -> int:
         """Default face: the one whose neighbor is closest to the bot."""
         entity = self.bot.entity

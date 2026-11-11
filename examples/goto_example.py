@@ -27,6 +27,7 @@ async def main() -> None:
 
     @bot.on("spawn")
     async def on_spawn():
+        assert bot.entity is not None
         print(f"Spawned at {bot.entity.position}; pathing to {goal}")
         try:
             arrived = await bot.goto(goal, timeout=60)

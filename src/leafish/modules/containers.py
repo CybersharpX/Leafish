@@ -1,0 +1,160 @@
+"""Container windows: chests, furnaces, crafting tables, etc.
+
+Tracks every open window's slots and state id, and sends ``window_click``
+transactions. For container-type windows the player inventory always
+occupies the **last 36 slots** of the window's slot array (27 main +
+9 hotbar), so the container section is everything before that.
+"""
+
+from __future__ import annotations
+
+import asyncio
+import time
+from dataclasses import dataclass, field
+from typing import TYPE_CHECKING, Any
+
+from ..exceptions import InventoryError
+from ..inventory.item import Item
+
+if TYPE_CHECKING:
+    from ..bot import LeafishBot
+
+_STATE_TIMEOUT = 1.0
+
+
+@dataclass
+class WindowState:
+    """Server-authoritative snapshot of one open window."""
+
+    window_id: int
+    title: str | None = None
+    inventory_type: int | None = None
+    slots: dict[int, Item] = field(default_factory=dict)
+    state_id: int = 0
+    player_offset: int | None = None
+    """Index of the first player-inventory slot (len(items) - 36)."""
+
+    @property
+    def size(self) -> int:
+        if self.player_offset is not None:
+            return self.player_offset + 36
+        return max(self.slots, default=-1) + 1
+
+    def container_slots(self) -> range:
+        end = self.player_offset if self.player_offset is not None else self.size
+        return range(0, max(0, end))
+
+    def player_slots(self) -> range:
+        start = self.player_offset if self.player_offset is not None else self.size - 36
+        return range(max(0, start), self.size)
+
+
+class ContainerModule:
+    """Manages open windows other than the player inventory (window 0)."""
+
+    def __init__(self, bot: LeafishBot) -> None:
+        self.bot = bot
+        self.windows: dict[int, WindowState] = {}
+
+    # -- queries -----------------------------------------------------------------
+
+    def window(self, window_id: int) -> WindowState | None:
+        return self.windows.get(window_id)
+
+    def state_id(self, window_id: int) -> int:
+        win = self.windows.get(window_id)
+        return win.state_id if win is not None else 0
+
+    def open_windows(self) -> list[int]:
+        return list(self.windows)
+
+    # -- server-driven updates ------------------------------------------------------
+
+    def open_window(self, window_id: int, title: str | None,
+                    inventory_type: int | None) -> WindowState:
+        win = WindowState(window_id, title=title, inventory_type=inventory_type)
+        self.windows[window_id] = win
+        return win
+
+    def close_window(self, window_id: int) -> None:
+        self.windows.pop(window_id, None)
+
+    def set_state(self, window_id: int, state_id: int) -> None:
+        win = self.windows.get(window_id)
+        if win is not None:
+            win.state_id = state_id
+
+    def _resolve(self, item: Item | None) -> Item | None:
+        if item is not None and item.item_id is not None and item.name is None:
+            item.name = self.bot.world.gamedata.item_name(item.item_id)
+        return item
+
+    def update_slot(self, window_id: int, slot: int,
+                    item_data: dict[str, Any]) -> None:
+        win = self.windows.get(window_id)
+        if win is None:
+            return
+        item = self._resolve(Item.from_slot(item_data, slot))
+        if item is None:
+            win.slots.pop(slot, None)
+        else:
+            win.slots[slot] = item
+
+    def update_contents(self, window_id: int,
+                        items_data: list[dict[str, Any]]) -> None:
+        win = self.windows.get(window_id)
+        if win is None:
+            return
+        win.slots.clear()
+        for idx, data in enumerate(items_data):
+            item = self._resolve(Item.from_slot(data, idx))
+            if item is not None:
+                win.slots[idx] = item
+        win.player_offset = max(0, len(items_data) - 36)
+
+    # -- actions ---------------------------------------------------------------------
+
+    async def click(self, window_id: int, slot: int, button: int = 0,
+                    mode: int = 0) -> None:
+        """Send a ``window_click`` for *window_id*.
+
+        ``mode`` 0 = normal click (button 0 pickup/place, 1 place-one/
+        pick-half), 1 = shift-click, 2 = hotbar swap.
+        """
+        win = self.windows.get(window_id)
+        if win is None and window_id != 0:
+            raise InventoryError(f"Window {window_id} is not open")
+        prev = self.state_id(window_id)
+        await self.bot._send_play(
+            "window_click",
+            {
+                "windowId": window_id,
+                "stateId": prev,
+                "slot": slot,
+                "mouseButton": button,
+                "mode": mode,
+                "changedSlots": [],
+                "cursorItem": None,
+            },
+        )
+        await self._wait_state(window_id, prev)
+
+    async def shift_click(self, window_id: int, slot: int) -> None:
+        """Shift-click *slot* (quick-move between container and inventory)."""
+        await self.click(window_id, slot, button=0, mode=1)
+
+    async def close(self, window_id: int | None = None) -> None:
+        """Close *window_id* (or the currently open window if omitted)."""
+        wid = self.bot.current_window_id if window_id is None else window_id
+        if wid is None:
+            return
+        await self.bot._send_play("close_window", {"windowId": wid})
+        self.windows.pop(wid, None)
+
+    async def _wait_state(self, window_id: int, prev: int,
+                          timeout: float = _STATE_TIMEOUT) -> None:
+        deadline = time.monotonic() + timeout
+        while self.state_id(window_id) == prev:
+            if time.monotonic() >= deadline:
+                return
+            await asyncio.sleep(0.02)

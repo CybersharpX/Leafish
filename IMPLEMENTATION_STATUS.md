@@ -63,9 +63,10 @@ Legend: ✅ done · 🚧 partial · ⬜ not started · ❌ unsupported/known iss
 
 ## Phase 5 — Inventory & interaction
 - 🚧 Inventory model: slots, items, equipment tracking
-- 🚧 Window/container click transactions: mode-0 (pickup/place/merge)
-  and mode-2 (hotbar swap) clicks with state-id sync; shift-click and
-  non-player windows partial
+- ✅ Window/container model: open/close tracking, `set_slot`/`window_items`
+  state sync, container slot ranges from `windows.json`
+- ✅ Window clicks: mode-0 (pickup/place/merge), mode-1 (shift-click
+  transfer), mode-2 (hotbar swap) with per-window state-id sync
 - ✅ Crafting: shaped + shapeless recipes via the 2x2 inventory grid;
   3x3 crafting-table recipes detected but rejected (table windows not
   yet implemented)

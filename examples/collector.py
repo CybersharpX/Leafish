@@ -27,6 +27,7 @@ async def main() -> None:
 
     @bot.on("spawn")
     async def on_spawn():
+        assert bot.entity is not None
         origin = bot.entity.position.floor()
         print(f"Mining around {origin}")
         dug = 0

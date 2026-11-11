@@ -24,6 +24,7 @@ async def main() -> None:
 
     @bot.on("spawn")
     async def on_spawn():
+        assert bot.entity is not None
         print(f"Spawned at {bot.entity.position}")
         await bot.chat("Hello from Leafish!")
 

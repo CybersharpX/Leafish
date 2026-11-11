@@ -19,6 +19,7 @@ from .inventory.inventory import Inventory
 from .modules.actions import ActionsModule
 from .modules.chat import ChatModule
 from .modules.collector import CollectorModule
+from .modules.containers import ContainerModule
 from .modules.crafting import CraftingModule
 from .modules.farming import FarmingModule
 from .modules.fishing import FishingModule
@@ -77,6 +78,7 @@ class LeafishBot:
         self.fishing = FishingModule(self)
         self.collector = CollectorModule(self)
         self.farming = FarmingModule(self)
+        self.containers = ContainerModule(self)
         self.plugins = PluginManager(self)
 
         # Movement control states --------------------------------------------
@@ -385,34 +387,45 @@ class LeafishBot:
         self.emit("inventory_update")
 
     def _packet_set_slot(self, params: dict[str, Any]) -> None:
-        if params.get("windowId", 0) == 0:
+        wid = int(params.get("windowId", 0))
+        slot = int(params.get("slot", 0))
+        if wid == 0:
             self.inventory_state_id = int(params.get("stateId", 0))
-        self.inventory.update_slot(
-            int(params.get("windowId", 0)),
-            int(params.get("slot", 0)),
-            params.get("item", {}),
-        )
+            self.inventory.update_slot(wid, slot, params.get("item", {}))
+        else:
+            self.containers.set_state(wid, int(params.get("stateId", 0)))
+            self.containers.update_slot(wid, slot, params.get("item", {}))
         self.emit("inventory_update")
 
     def _packet_window_items(self, params: dict[str, Any]) -> None:
-        if params.get("windowId", 0) == 0:
+        wid = int(params.get("windowId", 0))
+        items = params.get("items", [])
+        if wid == 0:
             self.inventory_state_id = int(params.get("stateId", 0))
-        self.inventory.update_contents(
-            int(params.get("windowId", 0)),
-            params.get("items", []),
-            params.get("carriedItem"),
-        )
+            self.inventory.update_contents(
+                wid, items, params.get("carriedItem"),
+            )
+        else:
+            self.containers.set_state(wid, int(params.get("stateId", 0)))
+            self.containers.update_contents(wid, items)
         self.emit("inventory_update")
 
     def _packet_open_window(self, params: dict[str, Any]) -> None:
-        self.current_window_id = params.get("windowId")
+        wid = params.get("windowId")
         title = component_to_text(nbt_to_python(params.get("windowTitle")))
+        self.current_window_id = wid
+        if wid is not None:
+            self.containers.open_window(
+                int(wid), title, params.get("inventoryType"),
+            )
         self.emit("window_open", self.current_window_id, title, params)
 
     def _packet_close_window(self, params: dict[str, Any]) -> None:
         wid = params.get("windowId", self.current_window_id)
         if self.current_window_id == wid:
             self.current_window_id = None
+        if wid is not None:
+            self.containers.close_window(int(wid))
         self.emit("window_close", wid)
 
     # -- entities -----------------------------------------------------------------
@@ -771,6 +784,25 @@ class LeafishBot:
     async def tend_farm(self, names=None, max_distance: int = 32) -> dict:
         """Harvest mature crops and replant with available seeds."""
         return await self.farming.tend(names, max_distance)
+
+    # -- containers -----------------------------------------------------------------
+
+    async def click_window(self, window_id: int, slot: int, button: int = 0,
+                           mode: int = 0) -> None:
+        """Send a window_click on any open window."""
+        await self.containers.click(window_id, slot, button, mode)
+
+    async def shift_click(self, window_id: int, slot: int) -> None:
+        """Shift-click (quick-move) a slot in an open window."""
+        await self.containers.shift_click(window_id, slot)
+
+    async def close_window(self, window_id: int | None = None) -> None:
+        """Close an open window (defaults to the current one)."""
+        await self.containers.close(window_id)
+
+    async def interact_block(self, block, face=None) -> None:
+        """Right-click a block (open containers, press buttons)."""
+        await self.actions.interact_block(block, face)
 
     # -- world actions ------------------------------------------------------------------
 

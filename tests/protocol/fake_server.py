@@ -47,17 +47,28 @@ class _FakeConn:
         self.cursor: dict[str, Any] = {"itemCount": 0}
         self.state_id = 0
         self._craft_index: list | None = None
+        # Extra open windows: wid -> {"slots": {}, "size": int, "state_id": int}
+        self.windows: dict[int, dict[str, Any]] = {}
 
     _EMPTY_SLOT: ClassVar[dict[str, Any]] = {"itemCount": 0}
 
+    @staticmethod
+    def _store_get(store: dict[int, dict[str, Any]], slot: int) -> dict[str, Any]:
+        return store.get(slot, _FakeConn._EMPTY_SLOT)
+
+    @staticmethod
+    def _store_set(store: dict[int, dict[str, Any]], slot: int,
+                   data: dict[str, Any]) -> None:
+        if data.get("itemCount", 0) <= 0:
+            store.pop(slot, None)
+        else:
+            store[slot] = data
+
     def _slot_get(self, slot: int) -> dict[str, Any]:
-        return self.inv.get(slot, self._EMPTY_SLOT)
+        return self._store_get(self.inv, slot)
 
     def _slot_set(self, slot: int, data: dict[str, Any]) -> None:
-        if data.get("itemCount", 0) <= 0:
-            self.inv.pop(slot, None)
-        else:
-            self.inv[slot] = data
+        self._store_set(self.inv, slot, data)
 
     async def sync_inventory(self) -> None:
         """Send a full window_items snapshot for window 0."""
@@ -65,6 +76,41 @@ class _FakeConn:
             "windowId": 0,
             "stateId": self.state_id,
             "items": [self._slot_get(i) for i in range(46)],
+            "carriedItem": self.cursor,
+        })
+
+    async def debug_open_window(self, window_id: int, size: int,
+                                title: str = "Chest") -> None:
+        """Test helper: open a container window of *size* slots."""
+        self.windows[window_id] = {
+            "slots": {}, "size": size, "state_id": 0,
+        }
+        await self.send("open_window", {
+            "windowId": window_id,
+            "inventoryType": 1,
+            "windowTitle": {"type": "string", "value": title},
+        })
+        await self.sync_window(window_id)
+
+    async def debug_set_window_slot(self, window_id: int, slot: int,
+                                    item: dict[str, Any]) -> None:
+        """Test helper: set a slot in an open container window."""
+        win = self.windows.get(window_id)
+        if win is None:
+            return
+        self._store_set(win["slots"], slot, item)
+        win["state_id"] += 1
+        await self.sync_window(window_id)
+
+    async def sync_window(self, window_id: int) -> None:
+        win = self.windows.get(window_id)
+        if win is None:
+            return
+        await self.send("window_items", {
+            "windowId": window_id,
+            "stateId": win["state_id"],
+            "items": [self._store_get(win["slots"], i)
+                      for i in range(win["size"])],
             "carriedItem": self.cursor,
         })
 
@@ -87,33 +133,49 @@ class _FakeConn:
             "removeComponents": [],
         }
 
-    def _apply_click(self, slot: int, button: int, mode: int) -> bool:
-        """Apply a window_click to the inventory model. Returns True if the
-        click was understood."""
-        if not (0 <= slot < 46):
+    def _apply_click(self, store: dict[int, dict[str, Any]], slot: int,
+                     button: int, mode: int) -> bool:
+        """Apply a window_click to *store* (slot -> item dict).
+
+        ``self.cursor`` is the shared carried item. Returns True if the
+        click was understood.
+        """
+        # Determine the valid slot range from the store's owner window.
+        max_slot = 45
+        for win in self.windows.values():
+            if win["slots"] is store:
+                max_slot = win["size"] - 1
+                break
+        if not (0 <= slot <= max_slot):
             return False
         if mode == 2:
             # Hotbar swap: mouseButton is the hotbar index 0-8.
             if not (0 <= button <= 8):
                 return False
-            target = 36 + button
-            a, b = self._slot_get(slot), self._slot_get(target)
-            self._slot_set(slot, dict(b))
-            self._slot_set(target, dict(a))
+            target = 36 + button if store is self.inv else None
+            if target is None or target > max_slot:
+                return False
+            a = dict(self._store_get(store, slot))
+            b = dict(self._store_get(store, target))
+            self._store_set(store, slot, b)
+            self._store_set(store, target, a)
             return True
+        if mode == 1:
+            return self._shift_click(store, slot, max_slot)
         if mode != 0:
-            return False  # shift-click etc. not implemented
-        was_result_take = slot == 0 and self._slot_get(0).get("itemCount", 0) > 0
+            return False  # other modes not implemented
+        was_result_take = store is self.inv and slot == 0 and \
+            self._store_get(store, 0).get("itemCount", 0) > 0
         cur = dict(self.cursor)
-        it = dict(self._slot_get(slot))
+        it = dict(self._store_get(store, slot))
         cur_empty = cur.get("itemCount", 0) <= 0
         it_empty = it.get("itemCount", 0) <= 0
         if button == 0:
             if cur_empty and not it_empty:
                 self.cursor = it
-                self._slot_set(slot, dict(self._EMPTY_SLOT))
+                self._store_set(store, slot, dict(self._EMPTY_SLOT))
             elif not cur_empty and it_empty:
-                self._slot_set(slot, cur)
+                self._store_set(store, slot, cur)
                 self.cursor = dict(self._EMPTY_SLOT)
             elif not cur_empty and not it_empty:
                 if cur.get("itemId") == it.get("itemId") and \
@@ -124,17 +186,17 @@ class _FakeConn:
                     it["itemCount"] -= mv
                     self.cursor = cur if cur["itemCount"] < 64 else \
                         dict(self._EMPTY_SLOT)
-                    self._slot_set(slot, it if it["itemCount"] > 0 else
+                    self._store_set(store, slot, it if it["itemCount"] > 0 else
                                    dict(self._EMPTY_SLOT))
                 else:
                     self.cursor = it
-                    self._slot_set(slot, cur)
+                    self._store_set(store, slot, cur)
         elif button == 1:
             if cur_empty and not it_empty:
                 take = (it["itemCount"] + 1) // 2
                 self.cursor = {**it, "itemCount": take}
                 it["itemCount"] -= take
-                self._slot_set(slot, it if it["itemCount"] > 0 else
+                self._store_set(store, slot, it if it["itemCount"] > 0 else
                                dict(self._EMPTY_SLOT))
             elif not cur_empty and it_empty:
                 if cur.get("itemCount", 0) > 1:
@@ -142,28 +204,73 @@ class _FakeConn:
                     self.cursor = cur
                     placed = dict(cur)
                     placed["itemCount"] = 1
-                    self._slot_set(slot, placed)
+                    self._store_set(store, slot, placed)
                 else:
-                    self._slot_set(slot, cur)
+                    self._store_set(store, slot, cur)
                     self.cursor = dict(self._EMPTY_SLOT)
             elif not cur_empty and not it_empty and \
                     cur.get("itemId") == it.get("itemId") and \
                     it.get("itemCount", 0) < 64:
                 it["itemCount"] += 1
                 cur["itemCount"] -= 1
-                self._slot_set(slot, it)
+                self._store_set(store, slot, it)
                 self.cursor = cur if cur["itemCount"] > 0 else \
                     dict(self._EMPTY_SLOT)
         if was_result_take and self.cursor.get("itemCount", 0) > 0:
             # Crafting result taken: consume one of each grid ingredient.
             for gs in (1, 2, 3, 4):
-                git = dict(self._slot_get(gs))
+                git = dict(self._store_get(self.inv, gs))
                 if git.get("itemCount", 0) > 1:
                     git["itemCount"] -= 1
-                    self._slot_set(gs, git)
+                    self._store_set(self.inv, gs, git)
                 else:
-                    self._slot_set(gs, dict(self._EMPTY_SLOT))
-        self._refresh_craft_result()
+                    self._store_set(self.inv, gs, dict(self._EMPTY_SLOT))
+        if store is self.inv:
+            self._refresh_craft_result()
+        return True
+
+    def _shift_click(self, store: dict[int, dict[str, Any]],
+                     slot: int, max_slot: int) -> bool:
+        """Mode-1 quick-move for container windows (last 36 slots are the
+        player inventory section)."""
+        if store is self.inv or max_slot < 36:
+            return False
+        container_end = max_slot + 1 - 36
+        src = dict(self._store_get(store, slot))
+        if src.get("itemCount", 0) <= 0:
+            return True
+        if slot < container_end:
+            dest_range = range(container_end, max_slot + 1)
+        else:
+            dest_range = range(0, container_end)
+        # Merge into same-id stacks first, then first empty slot.
+        remaining = src["itemCount"]
+        for d in dest_range:
+            if remaining <= 0:
+                break
+            dst = dict(self._store_get(store, d))
+            if dst.get("itemCount", 0) > 0 and \
+                    dst.get("itemId") == src.get("itemId") and \
+                    dst.get("itemCount", 0) < 64:
+                room = 64 - dst["itemCount"]
+                mv = min(room, remaining)
+                dst["itemCount"] += mv
+                remaining -= mv
+                self._store_set(store, d, dst)
+        if remaining > 0:
+            for d in dest_range:
+                if remaining <= 0:
+                    break
+                if self._store_get(store, d).get("itemCount", 0) <= 0:
+                    moved = dict(src)
+                    moved["itemCount"] = remaining
+                    self._store_set(store, d, moved)
+                    remaining = 0
+        leftover = dict(src)
+        leftover["itemCount"] = remaining
+        self._store_set(store, slot,
+                        leftover if remaining > 0 else
+                        dict(self._EMPTY_SLOT))
         return True
 
     # -- minimal crafting -------------------------------------------------------
@@ -386,14 +493,28 @@ class FakeMinecraftServer:
             if name == "keep_alive":
                 await conn.send("keep_alive", {"keepAliveId": params.get("keepAliveId")})
             elif name == "window_click" and conn.state == "play":
+                wid = int(params.get("windowId", 0))
+                store = conn.inv
+                win = None
+                if wid != 0:
+                    win = conn.windows.get(wid)
+                    if win is None:
+                        continue
+                    store = win["slots"]
                 applied = conn._apply_click(
+                    store,
                     int(params.get("slot", -1)),
                     int(params.get("mouseButton", 0)),
                     int(params.get("mode", 0)),
                 )
                 if applied:
-                    conn.state_id += 1
-                    await conn.sync_inventory()
+                    if wid == 0:
+                        conn.state_id += 1
+                        await conn.sync_inventory()
+                    else:
+                        assert win is not None
+                        win["state_id"] += 1
+                        await conn.sync_window(wid)
             elif name == "set_creative_slot" and conn.state == "play":
                 conn._slot_set(int(params.get("slot", -1)),
                                params.get("item") or {"itemCount": 0})
