@@ -26,5 +26,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Pathfinder: A* with step-ups and `goto` execution.
 - Crafting: shaped/shapeless recipes via 2x2 grid clicks; fake server
   gained an inventory model and minimal recipe matching.
+- Combat (`bot.pvp`), fishing (`bot.fish`), item collection
+  (`bot.collect`), farming (`bot.harvest`/`plant`/`tend_farm`).
+- Plugins (`bot.load_plugin`), `Leafish.create_bots`, examples,
+  disconnect cleanup for physics.
 - Fake protocol server + end-to-end integration tests.
 - `tools/fetch_mcdata.py` for vendoring minecraft-data JSON.

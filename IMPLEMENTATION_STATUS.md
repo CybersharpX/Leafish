@@ -71,7 +71,7 @@ Legend: ✅ done · 🚧 partial · ⬜ not started · ❌ unsupported/known iss
   yet implemented)
 - ✅ Digging (`start_dig`/`stop_dig`/`dig` with status packets + local
   state), block placement with face/direction handling
-- ⬜ Item collection
+- ✅ Item collection (`bot.collect` paths to nearby item entities)
 - ✅ Attack (`attack`) and equip (`equip`) actions
 
 ## Phase 6 — Automation
@@ -79,8 +79,9 @@ Legend: ✅ done · 🚧 partial · ⬜ not started · ❌ unsupported/known iss
   execution with stuck detection and replan
 - ✅ Combat: `bot.pvp` target acquisition + engage loop with pathfinder
   approach and attack cooldown; `bot.attack` for single hits
-- 🚧 Fishing: `bot.fish` cast/bite/reel with best-effort bite detection
-- ⬜ Farming
+- ✅ Fishing: `bot.fish` cast/bite/reel with best-effort bite detection
+- ✅ Farming: `bot.harvest`/`bot.plant`/`bot.tend_farm` for
+  wheat/carrots/potatoes/beetroots (no hoe-tilling yet)
 
 ## Phase 7 — Extensibility
 - ✅ Plugin loader: `bot.load_plugin` / `unload_plugin` for callables and

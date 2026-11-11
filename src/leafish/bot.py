@@ -18,7 +18,9 @@ from .exceptions import LeafishError
 from .inventory.inventory import Inventory
 from .modules.actions import ActionsModule
 from .modules.chat import ChatModule
+from .modules.collector import CollectorModule
 from .modules.crafting import CraftingModule
+from .modules.farming import FarmingModule
 from .modules.fishing import FishingModule
 from .modules.health import HealthModule
 from .modules.movement import CONTROL_STATES, MovementModule
@@ -73,6 +75,8 @@ class LeafishBot:
         self.pathfinder = Pathfinder(self)
         self.pvp = PVPModule(self)
         self.fishing = FishingModule(self)
+        self.collector = CollectorModule(self)
+        self.farming = FarmingModule(self)
         self.plugins = PluginManager(self)
 
         # Movement control states --------------------------------------------
@@ -749,6 +753,24 @@ class LeafishBot:
     async def fish(self, timeout: float = 60.0, **opts) -> bool:
         """Cast the fishing rod and catch one fish."""
         return await self.fishing.fish(timeout, **opts)
+
+    async def collect(self, max_distance: float = 8.0, count: int | None = None,
+                      **kwargs) -> int:
+        """Pick up nearby dropped-item entities; returns count collected."""
+        return await self.collector.collect(max_distance, count, **kwargs)
+
+    async def harvest(self, names=None, max_distance: int = 32) -> int:
+        """Dig mature crops in range; returns blocks harvested."""
+        return await self.farming.harvest(names, max_distance)
+
+    async def plant(self, seed_name: str | None = None,
+                    max_distance: int = 16) -> int:
+        """Plant seeds on empty farmland in range."""
+        return await self.farming.plant(seed_name, max_distance)
+
+    async def tend_farm(self, names=None, max_distance: int = 32) -> dict:
+        """Harvest mature crops and replant with available seeds."""
+        return await self.farming.tend(names, max_distance)
 
     # -- world actions ------------------------------------------------------------------
 
