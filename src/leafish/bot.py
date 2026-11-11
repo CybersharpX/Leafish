@@ -20,6 +20,7 @@ from .modules.actions import ActionsModule
 from .modules.chat import ChatModule
 from .modules.health import HealthModule
 from .modules.movement import CONTROL_STATES, MovementModule
+from .modules.pathfinder import Pathfinder
 from .modules.physics import PhysicsEngine
 from .protocol.protodef import ProtocolCodec
 from .protocol.session import ClientSession
@@ -64,6 +65,7 @@ class LeafishBot:
         self.health = HealthModule(self)
         self.chat_module = ChatModule(self)
         self.actions = ActionsModule(self)
+        self.pathfinder = Pathfinder(self)
 
         # Movement control states --------------------------------------------
         self.control_states: dict[str, bool] = {c: False for c in CONTROL_STATES}
@@ -675,6 +677,14 @@ class LeafishBot:
 
     async def move_to(self, target, timeout: float | None = None) -> None:
         await self.movement.move_to(target, timeout)
+
+    # -- pathfinding -----------------------------------------------------------------
+
+    def find_path(self, start, goal, **kwargs):
+        return self.pathfinder.find_path(start, goal, **kwargs)
+
+    async def goto(self, goal, timeout: float | None = None) -> bool:
+        return await self.pathfinder.goto(goal, timeout=timeout)
 
     async def stop_moving(self) -> None:
         await self.movement.stop_moving()
