@@ -46,9 +46,6 @@ Homepage = "https://github.com/leafish/leafish"
 [tool.hatch.build.targets.wheel]
 packages = ["src/leafish"]
 
-[tool.hatch.build.targets.wheel.force-include]
-"src/leafish/data" = "leafish/data"
-
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 asyncio_default_fixture_loop_scope = "function"
