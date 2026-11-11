@@ -67,9 +67,8 @@ Legend: ✅ done · 🚧 partial · ⬜ not started · ❌ unsupported/known iss
   state sync, container slot ranges from `windows.json`
 - ✅ Window clicks: mode-0 (pickup/place/merge), mode-1 (shift-click
   transfer), mode-2 (hotbar swap) with per-window state-id sync
-- ✅ Crafting: shaped + shapeless recipes via the 2x2 inventory grid;
-  3x3 crafting-table recipes detected but rejected (table windows not
-  yet implemented)
+- ✅ Crafting: shaped + shapeless recipes via the 2x2 inventory grid and
+  3x3 crafting-table windows (`crafting_table=True` with an open table)
 - ✅ Digging (`start_dig`/`stop_dig`/`dig` with status packets + local
   state), block placement with face/direction handling
 - ✅ Item collection (`bot.collect` paths to nearby item entities)

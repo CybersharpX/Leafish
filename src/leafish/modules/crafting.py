@@ -1,14 +1,18 @@
-"""Crafting: recipe lookup and 2x2 inventory-grid crafting via window clicks.
+"""Crafting: recipe lookup and crafting via window clicks.
 
 Recipes come from the vendored ``recipes.json`` (keyed by result item id,
-variants for each ingredient combination). Crafting uses the player
-inventory window (id 0): the 2x2 grid lives in slots 1-4 and the result in
-slot 0. Ingredients are moved with mode-0 clicks; recipes that need the
-3x3 crafting-table grid are recognized but rejected for now.
+variants for each ingredient combination). Two craft surfaces are
+supported:
 
-Click predictions (``changedSlots``/``cursorItem``) are sent empty; the
-server remains authoritative and resyncs via ``window_items``/
-``set_slot``. A state-id wait after every click keeps the client in sync.
+- the 2x2 player-inventory grid (window 0, slots 1-4, result slot 0),
+- the 3x3 crafting-table grid inside a container window opened by
+  right-clicking a crafting table (result slot 0, grid slots 1-9,
+  player inventory in the remaining 36 slots).
+
+Ingredients are moved with mode-0 clicks; click predictions
+(``changedSlots``/``cursorItem``) are sent empty and the server remains
+authoritative, resyncing via ``window_items``/``set_slot``. A state-id
+wait after every click keeps the client in sync.
 """
 
 from __future__ import annotations
@@ -33,6 +37,11 @@ RESULT_SLOT = 0
 #: Slots usable as ingredient sources / result deposit targets
 #: (main inventory 9-35 + hotbar 36-44; avoids grid/armor/offhand).
 STORAGE_SLOTS = range(9, 45)
+#: Crafting-table window geometry: result slot, 3x3 grid slots 1-9,
+#: player inventory occupies the last 36 slots.
+TABLE_RESULT_SLOT = 0
+TABLE_GRID_SLOTS = tuple(range(1, 10))
+TABLE_WIDTH = 3
 
 _STATE_TIMEOUT = 1.0
 
@@ -51,8 +60,49 @@ class Recipe:
     needs_table: bool = False
 
 
+class _SlotView:
+    """Uniform slot access for one craft surface (inventory window or a
+    container window). ``slot()`` reads an item, ``click()`` performs a
+    mode-0 click and waits for the server state sync."""
+
+    def __init__(self, module: CraftingModule, window_id: int | None,
+                 width: int, grid: tuple[int, ...], result: int,
+                 storage: range) -> None:
+        self._m = module
+        self.window_id = window_id
+        self.width = width
+        self.grid = grid
+        self.result = result
+        self.storage = storage
+        self._win = None
+        if window_id is not None:
+            self._win = module.bot.containers.windows.get(window_id)
+
+    def slot(self, index: int) -> Item | None:
+        if self._win is not None:
+            return self._win.slots.get(index)
+        return self._m.bot.inventory.slot(index)
+
+    def count(self, name: str) -> int:
+        """Total count of *name* across this view's storage slots."""
+        total = 0
+        for s in self.storage:
+            it = self.slot(s)
+            if it is not None and it.name == name:
+                total += it.count
+        return total
+
+    async def click(self, index: int, button: int = 0) -> None:
+        if self._win is not None:
+            assert self.window_id is not None
+            await self._m.bot.containers.click(
+                self.window_id, index, button=button)
+            return
+        await self._m._click(index, button=button)
+
+
 class CraftingModule:
-    """Finds recipes and crafts them through inventory-window clicks."""
+    """Finds recipes and crafts them through window clicks."""
 
     def __init__(self, bot: LeafishBot) -> None:
         self.bot = bot
@@ -138,15 +188,33 @@ class CraftingModule:
 
     def can_craft(self, recipe: Recipe) -> bool:
         inv = self.bot.inventory
-        return all(inv.count(n) >= c for n, c in recipe.needs.items())
+        if all(inv.count(n) >= c for n, c in recipe.needs.items()):
+            return True
+        if not recipe.needs_table:
+            return False
+        # Ingredients may sit in an open table window's player section,
+        # which mirrors (and in tests may differ from) window-0 slots.
+        for win in self.bot.containers.windows.values():
+            if win.player_offset is None:
+                continue
+            counts: dict[str, int] = {}
+            for s in win.player_slots():
+                it = win.slots.get(s)
+                if it is not None and it.name:
+                    counts[it.name] = counts.get(it.name, 0) + it.count
+            if all(counts.get(n, 0) >= c for n, c in recipe.needs.items()):
+                return True
+        return False
 
     def find_recipe(self, item_name: str,
-                    crafting_table: bool = False) -> Recipe | None:
-        """First craftable non-table recipe for *item_name*."""
+                    include_table: bool = False) -> Recipe | None:
+        """First craftable recipe for *item_name*.
+
+        Recipes needing the 3x3 crafting-table grid are skipped unless
+        *include_table* is true.
+        """
         for rec in self.recipes_for(item_name):
-            if rec.needs_table:
-                continue  # 3x3 grid not supported yet
-            if crafting_table and rec.needs_table:
+            if rec.needs_table and not include_table:
                 continue
             if self.can_craft(rec):
                 return rec
@@ -156,39 +224,44 @@ class CraftingModule:
 
     async def craft(self, item_name: str, count: int = 1,
                     crafting_table: bool = False) -> int:
-        """Craft *count* of *item_name* via the 2x2 inventory grid.
+        """Craft *count* of *item_name*.
+
+        Uses the 2x2 inventory grid by default. Pass
+        ``crafting_table=True`` to allow (and require, when the recipe
+        needs it) an open crafting-table window — open one first with
+        ``bot.interact_block`` on a crafting table.
 
         Returns the number of items actually added to the inventory.
         Raises :class:`CraftingError` when no usable recipe exists or
         ingredients run out mid-craft.
         """
-        recipe = self.find_recipe(item_name, crafting_table)
+        recipe = self.find_recipe(item_name, include_table=crafting_table)
         if recipe is None:
             if any(r.needs_table for r in self.recipes_for(item_name)):
                 raise CraftingError(
-                    f"'{item_name}' requires a crafting table (3x3 grid), "
-                    "which is not supported yet"
+                    f"'{item_name}' requires a crafting table (3x3 grid); "
+                    "open one and pass crafting_table=True"
                 )
             raise CraftingError(
                 f"No craftable recipe for '{item_name}' "
                 "(missing ingredients or unknown item)"
             )
-        inv = self.bot.inventory
-        start = inv.count(item_name)
+        view = self._craft_view(recipe)
+        start = view.count(item_name)
         made = 0
         attempts = 0
         max_attempts = (count + recipe.result_count - 1) // recipe.result_count + 3
         while made < count and attempts < max_attempts:
             attempts += 1
-            await self._fill_grid(recipe)
-            result = inv.slot(RESULT_SLOT)
+            await self._fill_grid(recipe, view)
+            result = view.slot(view.result)
             if result is None or result.empty:
                 log.debug("craft(%s): result slot empty", item_name)
                 continue
             self._cursor = result
-            await self._click(RESULT_SLOT)
-            await self._deposit_cursor()
-            made = inv.count(item_name) - start
+            await view.click(view.result)
+            await self._deposit_cursor(view)
+            made = view.count(item_name) - start
         if made < count:
             raise CraftingError(
                 f"Crafting '{item_name}' produced {made}/{count} items"
@@ -196,71 +269,89 @@ class CraftingModule:
         self.bot.emit("crafted", item_name, made)
         return made
 
+    def _craft_view(self, recipe: Recipe) -> _SlotView:
+        """Pick the craft surface: table window for 3x3 recipes, else the
+        player inventory window."""
+        if recipe.needs_table:
+            for wid, win in self.bot.containers.windows.items():
+                if win.player_offset == 10 and win.size == 46:
+                    return _SlotView(
+                        self, wid, TABLE_WIDTH, TABLE_GRID_SLOTS,
+                        TABLE_RESULT_SLOT,
+                        range(win.player_offset, win.size),
+                    )
+            raise CraftingError(
+                "No crafting table window is open; right-click a "
+                "crafting table first (bot.interact_block)"
+            )
+        return _SlotView(
+            self, None, 2, GRID_SLOTS, RESULT_SLOT, STORAGE_SLOTS,
+        )
+
     # -- grid management ------------------------------------------------------------
 
-    def _grid_expectation(self, recipe: Recipe) -> dict[int, str]:
+    def _grid_expectation(self, recipe: Recipe,
+                          view: _SlotView) -> dict[int, str]:
         """Map grid slot -> required item name for this recipe."""
         exp: dict[int, str] = {}
         if recipe.shape:
             for r, row in enumerate(recipe.shape):
                 for c, nm in enumerate(row):
                     if nm is not None:
-                        exp[1 + r * 2 + c] = nm
+                        exp[view.grid[r * view.width + c]] = nm
             return exp
         # Shapeless: distribute required cells row-major.
         i = 0
         for nm, cnt in recipe.needs.items():
             for _ in range(cnt):
-                if i >= len(GRID_SLOTS):
+                if i >= len(view.grid):
                     break
-                exp[GRID_SLOTS[i]] = nm
+                exp[view.grid[i]] = nm
                 i += 1
         return exp
 
-    async def _fill_grid(self, recipe: Recipe) -> None:
-        inv = self.bot.inventory
-        expected = self._grid_expectation(recipe)
+    async def _fill_grid(self, recipe: Recipe, view: _SlotView) -> None:
+        expected = self._grid_expectation(recipe, view)
 
         # Phase 1: clear cells holding the wrong item.
-        for slot in GRID_SLOTS:
-            item = inv.slot(slot)
+        for slot in view.grid:
+            item = view.slot(slot)
             if item is None or item.empty:
                 continue
             if item.name != expected.get(slot):
-                await self._click(slot)
-                await self._deposit_cursor()
+                await view.click(slot)
+                await self._deposit_cursor(view)
 
         # Phase 2: fill each expected cell that lacks the right item.
         # Group by name so one pickup can serve several cells.
         by_name: dict[str, list[int]] = {}
         for slot, nm in expected.items():
-            item = inv.slot(slot)
+            item = view.slot(slot)
             if item is None or item.empty or item.name != nm:
                 by_name.setdefault(nm, []).append(slot)
         for nm, slots in by_name.items():
             for dst in slots:
-                src = self._find_storage(nm)
+                src = self._find_storage(view, nm)
                 if src is None:
                     raise CraftingError(f"Missing ingredient '{nm}'")
-                stack = inv.slot(src)
+                stack = view.slot(src)
                 if stack is None:
                     raise CraftingError(f"Missing ingredient '{nm}'")
-                await self._click(src)              # whole stack -> cursor
+                await view.click(src)              # whole stack -> cursor
                 self._cursor = stack
-                await self._click(dst, button=1)    # place exactly one
+                await view.click(dst, button=1)    # place exactly one
                 cur = self._cursor
                 if cur is not None:
                     cur.count -= 1
                     if cur.count <= 0:
                         self._cursor = None
                 if self._cursor is not None:
-                    await self._click(src)          # return remainder
+                    await view.click(src)          # return remainder
                     self._cursor = None
 
-    def _find_storage(self, name: str) -> int | None:
-        inv = self.bot.inventory
-        for s in STORAGE_SLOTS:
-            item = inv.slot(s)
+    def _find_storage(self, view: _SlotView, name: str) -> int | None:
+        for s in view.storage:
+            item = view.slot(s)
             if item is not None and not item.empty and item.name == name:
                 return s
         return None
@@ -286,34 +377,33 @@ class CraftingModule:
         data = self._gamedata().item_by_id(item.item_id)
         return int((data or {}).get("stackSize") or 64)
 
-    async def _deposit_cursor(self) -> None:
+    async def _deposit_cursor(self, view: _SlotView) -> None:
         """Place the cursor stack into storage (merge or empty slot)."""
         cur = self._cursor
         if cur is None or cur.empty:
             self._cursor = None
             return
-        inv = self.bot.inventory
         while self._cursor is not None and not self._cursor.empty:
             cur = self._cursor
             target: int | None = None
             merge_room = 0
             # Prefer merging into a same-name stack with room.
-            for s in STORAGE_SLOTS:
-                it = inv.slot(s)
+            for s in view.storage:
+                it = view.slot(s)
                 if it is not None and not it.empty and it.name == cur.name:
                     room = self._max_stack(it) - it.count
                     if room > 0:
                         target, merge_room = s, room
                         break
             if target is None:
-                for s in STORAGE_SLOTS:
-                    it = inv.slot(s)
+                for s in view.storage:
+                    it = view.slot(s)
                     if it is None or it.empty:
                         target = s
                         break
             if target is None:
                 raise CraftingError("No inventory space to deposit cursor item")
-            await self._click(target)
+            await view.click(target)
             leftover = max(0, cur.count - merge_room) if merge_room else 0
             if merge_room and leftover > 0:
                 self._cursor = Item(

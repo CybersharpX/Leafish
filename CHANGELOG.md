@@ -33,5 +33,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Container windows: `bot.open_window`/`close_window`/`shift_click`/
   `window_click` with per-window slot stores, `windows.json` layouts,
   and fake-server shift-click simulation.
+- Crafting tables: 3x3 recipes (e.g. diamond_pickaxe) craft inside an
+  open crafting-table window via `bot.craft(..., crafting_table=True)`.
 - Fake protocol server + end-to-end integration tests.
 - `tools/fetch_mcdata.py` for vendoring minecraft-data JSON.

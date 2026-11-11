@@ -80,10 +80,15 @@ class _FakeConn:
         })
 
     async def debug_open_window(self, window_id: int, size: int,
-                                title: str = "Chest") -> None:
-        """Test helper: open a container window of *size* slots."""
+                                title: str = "Chest",
+                                kind: str | None = None) -> None:
+        """Test helper: open a container window of *size* slots.
+
+        ``kind="crafting_table"`` marks a 46-slot workbench window whose
+        slot 0 is a craft result fed by the 3x3 grid in slots 1-9.
+        """
         self.windows[window_id] = {
-            "slots": {}, "size": size, "state_id": 0,
+            "slots": {}, "size": size, "state_id": 0, "kind": kind,
         }
         await self.send("open_window", {
             "windowId": window_id,
@@ -142,10 +147,13 @@ class _FakeConn:
         """
         # Determine the valid slot range from the store's owner window.
         max_slot = 45
+        owner = None
         for win in self.windows.values():
             if win["slots"] is store:
+                owner = win
                 max_slot = win["size"] - 1
                 break
+        is_table = owner is not None and owner.get("kind") == "crafting_table"
         if not (0 <= slot <= max_slot):
             return False
         if mode == 2:
@@ -164,8 +172,9 @@ class _FakeConn:
             return self._shift_click(store, slot, max_slot)
         if mode != 0:
             return False  # other modes not implemented
-        was_result_take = store is self.inv and slot == 0 and \
-            self._store_get(store, 0).get("itemCount", 0) > 0
+        was_result_take = slot == 0 and \
+            self._store_get(store, 0).get("itemCount", 0) > 0 and \
+            (store is self.inv or is_table)
         cur = dict(self.cursor)
         it = dict(self._store_get(store, slot))
         cur_empty = cur.get("itemCount", 0) <= 0
@@ -218,15 +227,18 @@ class _FakeConn:
                     dict(self._EMPTY_SLOT)
         if was_result_take and self.cursor.get("itemCount", 0) > 0:
             # Crafting result taken: consume one of each grid ingredient.
-            for gs in (1, 2, 3, 4):
-                git = dict(self._store_get(self.inv, gs))
+            grid = (1, 2, 3, 4) if store is self.inv else tuple(range(1, 10))
+            for gs in grid:
+                git = dict(self._store_get(store, gs))
                 if git.get("itemCount", 0) > 1:
                     git["itemCount"] -= 1
-                    self._store_set(self.inv, gs, git)
+                    self._store_set(store, gs, git)
                 else:
-                    self._store_set(self.inv, gs, dict(self._EMPTY_SLOT))
+                    self._store_set(store, gs, dict(self._EMPTY_SLOT))
         if store is self.inv:
             self._refresh_craft_result()
+        elif is_table and owner is not None:
+            self._refresh_window_craft(owner)
         return True
 
     def _shift_click(self, store: dict[int, dict[str, Any]],
@@ -322,13 +334,13 @@ class _FakeConn:
             self._craft_index = idx
         return self._craft_index
 
-    def _grid_shape(self):
-        """Normalize the 2x2 grid (slots 1-4) to (h, w, shape-tuple)."""
+    def _grid_shape_for(self, get, grid_slots, width):
+        """Normalize a craft grid to (h, w, shape-tuple)."""
         pat = {}
-        for i, s in enumerate((1, 2, 3, 4)):
-            it = self._slot_get(s)
+        for i, s in enumerate(grid_slots):
+            it = get(s)
             if it.get("itemCount", 0) > 0:
-                pat[(i // 2, i % 2)] = it.get("itemId")
+                pat[(i // width, i % width)] = it.get("itemId")
         if not pat:
             return None
         rs = [r for r, _ in pat]
@@ -343,9 +355,12 @@ class _FakeConn:
             shape.append(tuple(row))
         return (h, w, tuple(shape))
 
-    def _refresh_craft_result(self) -> None:
-        """Recompute crafting slot 0 from the 2x2 grid contents."""
-        gs = self._grid_shape()
+    def _grid_shape(self):
+        """Normalize the 2x2 grid (slots 1-4) to (h, w, shape-tuple)."""
+        return self._grid_shape_for(self._slot_get, (1, 2, 3, 4), 2)
+
+    def _match_craft(self, gs, max_shapeless: int):
+        """Find a recipe matching normalized grid shape *gs*."""
         result = None
         if gs is not None:
             h, w, shape = gs
@@ -354,14 +369,31 @@ class _FakeConn:
                 if kind == "shape" and key == (h, w) and sshape == shape:
                     result = (rid, rc)
                     break
-                if kind == "shapeless" and key == flat and len(flat) <= 4:
+                if kind == "shapeless" and key == flat and len(flat) <= max_shapeless:
                     result = (rid, rc)
                     break
+        return result
+
+    def _refresh_craft_result(self) -> None:
+        """Recompute crafting slot 0 from the 2x2 grid contents."""
+        result = self._match_craft(self._grid_shape(), 4)
         if result is None:
             self._slot_set(0, dict(self._EMPTY_SLOT))
         else:
             rid, rc = result
             self._slot_set(0, self._item_dict(rid, rc))
+
+    def _refresh_window_craft(self, win: dict[str, Any]) -> None:
+        """Recompute slot 0 of a crafting-table window (3x3 grid 1-9)."""
+        store = win["slots"]
+        gs = self._grid_shape_for(
+            lambda s: self._store_get(store, s), range(1, 10), 3)
+        result = self._match_craft(gs, 9)
+        if result is None:
+            self._store_set(store, 0, dict(self._EMPTY_SLOT))
+        else:
+            rid, rc = result
+            self._store_set(store, 0, self._item_dict(rid, rc))
 
     async def send(self, name: str, params: dict[str, Any] | None = None) -> None:
         payload = self.codec.encode(self.state, "toClient", name, params or {})

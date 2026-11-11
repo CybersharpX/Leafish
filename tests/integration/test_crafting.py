@@ -69,3 +69,48 @@ async def test_craft_stick_count(server):
         assert bot.inventory.count("stick") >= 8
     finally:
         await bot.quit()
+
+
+async def test_craft_in_crafting_table(server):
+    """A 3x3-only recipe (diamond_pickaxe) crafts inside a table window."""
+    gd = get_gamedata("1.21.11")
+    bot = await _spawn_with_planks(server, 0)
+    try:
+        conn = server.connections[0]
+        # Open a 46-slot workbench window (result + 3x3 grid + 36 player).
+        await conn.debug_open_window(
+            1, 46, "Crafting Table", kind="crafting_table")
+        for _ in range(60):
+            if bot.containers.window(1) is not None:
+                break
+            await asyncio.sleep(0.05)
+        win = bot.containers.window(1)
+        assert win is not None
+        assert win.player_offset == 10
+
+        # Seed 3 diamonds + 2 sticks into the window's player section.
+        diamond = gd.item_by_name("diamond")
+        stick = gd.item_by_name("stick")
+        assert diamond is not None and stick is not None
+        for i in range(3):
+            await conn.debug_set_window_slot(
+                1, 10 + i, _slot(diamond["id"], 1))
+        for i in range(2):
+            await conn.debug_set_window_slot(
+                1, 13 + i, _slot(stick["id"], 1))
+        for _ in range(60):
+            if win.slots.get(10) is not None and \
+                    win.slots.get(14) is not None:
+                break
+            await asyncio.sleep(0.05)
+
+        made = await asyncio.wait_for(
+            bot.craft("diamond_pickaxe", 1, crafting_table=True), 30)
+        assert made == 1
+        names = [it.name for it in win.slots.values()]
+        assert "diamond_pickaxe" in names
+        # Ingredients consumed: 3 diamonds, 2 sticks.
+        assert "diamond" not in names
+        assert "stick" not in names
+    finally:
+        await bot.quit()
