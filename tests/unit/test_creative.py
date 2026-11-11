@@ -31,7 +31,7 @@ class _Bot:
 @pytest.mark.asyncio
 async def test_set_slot_builds_untrusted_slot():
     bot = _Bot()
-    cr = CreativeModule(bot)
+    cr = CreativeModule(cast(Any, bot))
     await cr.set_slot(36, "diamond", count=3)
     name, params = bot.sent[-1]
     assert name == "set_creative_slot"
@@ -45,7 +45,7 @@ async def test_set_slot_builds_untrusted_slot():
 @pytest.mark.asyncio
 async def test_set_slot_clear():
     bot = _Bot()
-    cr = CreativeModule(bot)
+    cr = CreativeModule(cast(Any, bot))
     await cr.set_slot(9, None)
     assert bot.sent[-1][1]["item"] == {"itemCount": 0}
     assert 9 not in bot.inventory.slots
@@ -55,7 +55,7 @@ async def test_set_slot_clear():
 async def test_give_uses_empty_slot_and_set_held():
     bot = _Bot()
     bot.inventory.slots[9] = Item(item_id=1, count=1, name="dirt")
-    cr = CreativeModule(bot)
+    cr = CreativeModule(cast(Any, bot))
     item = await cr.give("stone", count=2)
     assert item.name == "stone"
     slot_used = bot.sent[-1][1]["slot"]
@@ -67,7 +67,7 @@ async def test_give_uses_empty_slot_and_set_held():
 @pytest.mark.asyncio
 async def test_unknown_item_raises():
     bot = _Bot()
-    cr = CreativeModule(bot)
+    cr = CreativeModule(cast(Any, bot))
     with pytest.raises(InventoryError):
         await cr.give("not_a_real_item_xyz")
     with pytest.raises(InventoryError):

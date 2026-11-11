@@ -94,7 +94,7 @@ def test_furnace_window_progress():
     assert fw.cook_time_total == 200
     assert fw.progress == pytest.approx(0.5)
     assert fw.input_item is w.slots[0]
-    assert fw.output_item.count == 3
+    assert fw.output_item is not None and fw.output_item.count == 3
 
 
 def test_enchantment_table_window():
@@ -102,9 +102,9 @@ def test_enchantment_table_window():
     w = _win("Enchanting Table", player_offset=3,
              slots={0: _item(0, 9), 1: _item(1, 4, 3), 2: _item(2, 10)})
     ew = EnchantmentTableWindow(bot, w)
-    assert ew.item_slot.item_id == 9
-    assert ew.lapis_slot.count == 3
-    assert ew.result_slot.item_id == 10
+    assert ew.item_slot is not None and ew.item_slot.item_id == 9
+    assert ew.lapis_slot is not None and ew.lapis_slot.count == 3
+    assert ew.result_slot is not None and ew.result_slot.item_id == 10
 
 
 @pytest.mark.asyncio

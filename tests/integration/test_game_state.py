@@ -5,7 +5,7 @@ import asyncio
 
 import pytest
 
-from leafish import Leafish
+from leafish import Leafish, LeafishBot
 from tests.protocol.fake_server import FakeMinecraftServer
 
 
@@ -22,7 +22,7 @@ async def server():
     await srv.stop()
 
 
-async def _connect(server) -> "object":
+async def _connect(server) -> LeafishBot:
     bot = await Leafish.create_bot(
         host="127.0.0.1", port=server.port,
         username="StateBot", auth="offline", version="1.21.11")
