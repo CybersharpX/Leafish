@@ -34,6 +34,12 @@ class Entity:
     eye_height: float = 1.62
     """Height of the entity's eyes above its position (for raycasts)."""
 
+    width: float = 0.6
+    """Entity width (collision box X/Z extent)."""
+
+    height: float = 1.8
+    """Entity height (collision box Y extent)."""
+
     metadata: dict[str, Any] = field(default_factory=dict)
     """Entity metadata entries keyed by metadata index."""
 
@@ -42,8 +48,6 @@ class Entity:
 
     health: float | None = None
     """Health when exposed via metadata; ``None`` if unknown."""
-
-    bounding_box: BoundingBox | None = None
 
     _last_position: Vec3 | None = field(default=None, repr=False)
     _position_changed: bool = field(default=False, repr=False)
@@ -88,6 +92,24 @@ class Entity:
             if key == 9 and isinstance(value, (int, float)):
                 self.health = float(value)
 
+    # -- collision volume ----------------------------------------------------
+
+    def bounding_box(self) -> BoundingBox:
+        """Approximate axis-aligned collision box at the current position."""
+        half = self.width / 2.0
+        return BoundingBox(
+            self.position.x - half,
+            self.position.y,
+            self.position.z - half,
+            self.position.x + half,
+            self.position.y + self.height,
+            self.position.z + half,
+        )
+
+    def contains_point(self, point: Vec3) -> bool:
+        """Whether *point* lies inside this entity's collision box."""
+        return self.bounding_box().contains(point)
+
     def consume_position_changed(self) -> bool:
         changed = self._position_changed
         self._position_changed = False
@@ -106,15 +128,26 @@ class Mob(Entity):
     """A non-player living entity."""
 
 
+@dataclass
 class ItemEntity(Entity):
     """A dropped item entity."""
 
     item: Any = None
+    width: float = 0.25
+    height: float = 0.25
 
 
+@dataclass
 class Projectile(Entity):
     """A projectile (arrow, fireball, ...)."""
 
+    width: float = 0.5
+    height: float = 0.5
 
+
+@dataclass
 class Vehicle(Entity):
     """A vehicle the bot or another entity can ride."""
+
+    width: float = 0.9
+    height: float = 0.9

@@ -155,10 +155,8 @@ class LeafishBot:
             self.pvp.stop,
             self.movement.stop_moving,
         ):
-            try:
+            with contextlib.suppress(Exception):  # cleanup must not raise
                 await stop()
-            except Exception:  # noqa: BLE001 - cleanup must not raise
-                pass
         reason = "client disconnect"
         if self.session is not None:
             reason = self.session.state.disconnect_reason or reason
@@ -388,10 +386,10 @@ class LeafishBot:
                   self.health.experience_progress)
 
     def _packet_held_item_slot(self, params: dict[str, Any]) -> None:
-        slot_id = int(params.get("slotId", params.get("slot", 0)))
-        # slotId is a window slot (36-44) or a hotbar index depending on version.
-        if 36 <= slot_id <= 44:
-            slot_id -= 36
+        # Clientbound slot is the hotbar index (0-8) in modern versions.
+        slot_id = int(params.get("slot", params.get("slotId", 0)))
+        if not 0 <= slot_id <= 8:
+            return
         self.inventory.held_slot = slot_id
         self.emit("held_item_changed", slot_id)
 
@@ -542,6 +540,7 @@ class LeafishBot:
             cx, cz, sections,
             heightmaps=heightmaps, block_entities=block_entities,
         )
+        self.world.apply_light_update(cx, cz, params)
         self.emit("chunk_column_load", cx, cz)
 
     def _packet_unload_chunk(self, params: dict[str, Any]) -> None:
@@ -585,6 +584,9 @@ class LeafishBot:
         self.emit("block_entity_data", pos, nbt, params)
 
     def _packet_update_light(self, params: dict[str, Any]) -> None:
+        self.world.apply_light_update(
+            params.get("chunkX", 0), params.get("chunkZ", 0), params,
+        )
         self.emit("update_light", params)
 
     def _packet_chunk_biomes(self, params: dict[str, Any]) -> None:
@@ -689,12 +691,18 @@ class LeafishBot:
         return self.entities.nearest(self.entity.position, predicate, max_distance)
 
     def entity_at(self, position) -> Any:
-        """Entity whose bounding box contains *position*."""
+        """Entity whose collision box contains *position*.
+
+        When several entities overlap, the nearest to the point wins;
+        returns ``None`` if no entity contains the position.
+        """
         point = position if isinstance(position, Vec3) else Vec3(*position)
         best = None
         best_d = float("inf")
         for e in self.entities.all():
-            d = point.distance_to(e.position)
+            if not e.contains_point(point):
+                continue
+            d = point.distance_squared_to(e.position)
             if d < best_d:
                 best_d = d
                 best = e

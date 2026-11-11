@@ -91,7 +91,7 @@ class ChunkSection:
 class Chunk:
     """A 16x16 column of chunk sections."""
 
-    __slots__ = ("block_entities", "heightmaps", "sections", "x", "z")
+    __slots__ = ("block_entities", "heightmaps", "light", "sections", "x", "z")
 
     def __init__(self, x: int, z: int) -> None:
         self.x = x
@@ -99,6 +99,9 @@ class Chunk:
         self.sections: dict[int, ChunkSection] = {}
         self.block_entities: list[dict] = []
         self.heightmaps: dict[str, Any] = {}
+        #: ``section_y -> (sky_light_bytes|None, block_light_bytes|None)``.
+        #: Each entry is a 2048-byte nibble array (4096 light values).
+        self.light: dict[int, tuple[bytes | None, bytes | None]] = {}
 
 
 class World:
@@ -196,6 +199,92 @@ class World:
 
     def unload_chunk(self, cx: int, cz: int) -> None:
         self.chunks.pop((cx, cz), None)
+
+    # -- lighting ---------------------------------------------------------------
+
+    @staticmethod
+    def _mask_sections(
+        mask: list[int], empty_mask: list[int], arrays: list[Any],
+        min_section_y: int,
+    ) -> dict[int, bytes]:
+        """Map light-update bitmask bits to per-section nibble arrays.
+
+        Bit ``i`` of the mask covers section ``min_section_y - 1 + i``
+        (the masks span ``section_count + 2`` bits). Bits set in
+        ``empty_mask`` have all-zero data and consume no array entry.
+        """
+        result: dict[int, bytes] = {}
+        # Combine i64 words into one big int (masks arrive as lists).
+        value = 0
+        for i, word in enumerate(mask):
+            value |= (int(word) & 0xFFFFFFFFFFFFFFFF) << (64 * i)
+        empty = 0
+        for i, word in enumerate(empty_mask):
+            empty |= (int(word) & 0xFFFFFFFFFFFFFFFF) << (64 * i)
+        idx = 0
+        for bit in range(len(mask) * 64):
+            if (value >> bit) & 1:
+                section_y = min_section_y - 1 + bit
+                if (empty >> bit) & 1:
+                    result[section_y] = b""
+                elif idx < len(arrays):
+                    result[section_y] = bytes(arrays[idx])
+                    idx += 1
+        return result
+
+    def apply_light_update(self, cx: int, cz: int, params: dict[str, Any]) -> None:
+        """Store light data from an ``update_light`` packet."""
+        chunk = self.chunk_at(int(cx), int(cz))
+        if chunk is None:
+            chunk = self.load_chunk(int(cx), int(cz))
+        min_sy = self.min_section_y
+        sky = self._mask_sections(
+            params.get("skyLightMask") or [],
+            params.get("emptySkyLightMask") or [],
+            params.get("skyLight") or [],
+            min_sy,
+        )
+        block = self._mask_sections(
+            params.get("blockLightMask") or [],
+            params.get("emptyBlockLightMask") or [],
+            params.get("blockLight") or [],
+            min_sy,
+        )
+        section_ys = set(sky) | set(block)
+        for sy in section_ys:
+            sky_data = sky.get(sy)
+            block_data = block.get(sy)
+            chunk.light[sy] = (
+                None if sky_data is None else sky_data,
+                None if block_data is None else block_data,
+            )
+
+    @staticmethod
+    def _nibble(data: bytes, index: int) -> int:
+        """Read nibble *index* (0..4095) from a 2048-byte packed array."""
+        if index >> 1 >= len(data):
+            return 0
+        byte = data[index >> 1]
+        return (byte >> ((index & 1) * 4)) & 0xF
+
+    def light_at(self, pos: BlockPos | Vec3 | tuple) -> tuple[int | None, int | None]:
+        """Return ``(sky_light, block_light)`` at *pos*.
+
+        ``None`` means no light data was received for that section.
+        """
+        bp = self._to_block_pos(pos)
+        chunk = self.chunk_at(bp.x >> 4, bp.z >> 4)
+        if chunk is None:
+            return None, None
+        entry = chunk.light.get(bp.y >> 4)
+        if entry is None:
+            return None, None
+        idx = ((bp.y & 15) << 8) | ((bp.z & 15) << 4) | (bp.x & 15)
+        sky, block = entry
+        return (
+            self._nibble(sky, idx) if sky else (0 if sky == b"" else None),
+            self._nibble(block, idx) if block else (0 if block == b"" else None),
+        )
 
     # -- blocks -------------------------------------------------------------------
 

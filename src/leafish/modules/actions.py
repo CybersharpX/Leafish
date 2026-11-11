@@ -41,6 +41,41 @@ def _normal_key(v: Vec3) -> tuple[int, int, int]:
 _NORMAL_TO_FACE = {_normal_key(v): k for k, v in FACE_DIRECTIONS.items()}
 
 
+#: Bare-hand dig speed baseline; correct tools divide dig time by their
+#: tier speed. Values approximate vanilla Java Edition tool speeds.
+_TOOL_TIER_SPEEDS = {
+    "wooden": 2.0,
+    "stone": 4.0,
+    "iron": 6.0,
+    "diamond": 8.0,
+    "netherite": 9.0,
+    "golden": 12.0,
+    "gold": 12.0,
+}
+
+#: Tool class words found in item names -> whether they speed up digging.
+_TOOL_CLASSES = ("pickaxe", "axe", "shovel", "hoe")
+
+
+def _held_tool_speed(bot) -> float:
+    """Best-effort dig speed multiplier from the held item's name.
+
+    Returns 1.0 for bare hands/unknown items. This is an approximation:
+    vanilla also factors in whether the tool is *correct* for the block's
+    material and enchantments, which minecraft-data does not fully expose.
+    """
+    item = bot.inventory.held_item if bot.inventory is not None else None
+    name = getattr(item, "name", None) or ""
+    if not name:
+        return 1.0
+    if not any(cls in name for cls in _TOOL_CLASSES):
+        return 1.0
+    for tier, speed in _TOOL_TIER_SPEEDS.items():
+        if name.startswith(tier + "_"):
+            return speed
+    return 1.0
+
+
 class ActionsModule:
     """Digging, block placement, combat and equipment actions."""
 
@@ -183,16 +218,28 @@ class ActionsModule:
                 best_dot, best_face = dot, face
         return best_face
 
+    def dig_time(self, block_or_pos) -> float:
+        """Estimated digging time in seconds for *block_or_pos*."""
+        pos = self._resolve_pos(block_or_pos)
+        block = self.bot.world.block_at(pos)
+        if block is None:
+            return 0.0
+        return self._dig_time(block)
+
     def _dig_time(self, block) -> float:
-        """Approximate digging time in seconds."""
+        """Approximate digging time in seconds.
+
+        Accounts for creative mode, insta-break blocks, held-tool tier
+        and (best-effort) the block's material. Haste/mining-fatigue
+        effects and enchantments are not yet applied.
+        """
         if self.bot.game_mode == "creative":
             return 0.0
         hardness = getattr(block, "hardness", 0.0) or 0.0
         if hardness <= 0:
             return 0.0  # insta-break
-        # Bare-hand estimate; tool/enchantment bonuses arrive with the
-        # inventory/tool module.
-        return max(hardness * 1.5, 0.05)
+        speed = _held_tool_speed(self.bot)
+        return max(hardness * 1.5 / speed, 0.05)
 
     async def stop_digging(self) -> None:
         """Cancel an in-progress dig."""
@@ -346,9 +393,8 @@ class ActionsModule:
     async def equip(self, item, destination: str | None = None) -> None:
         """Equip *item* (name, Item or slot) to hand/offhand/armor.
 
-        Currently supports ``hand`` (hotbar selection or hotbar swap) and
-        ``offhand`` via window clicks. Armor destinations raise until the
-        container module lands.
+        Supports ``hand`` (hotbar selection or hotbar swap), ``offhand``
+        and ``armor``/``armor_<slot>`` (5-8) via window clicks.
         """
         destination = (destination or "hand").lower()
         inv = self.bot.inventory

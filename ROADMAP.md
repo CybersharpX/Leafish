@@ -23,38 +23,45 @@
 - [ ] Full coverage of per-version custom packet types
 
 ## Phase 3 — Basic bot
-- [ ] Bot creation API (`Leafish.create_bot`)
-- [ ] Spawn/login/configuration handling
-- [ ] Chat send/receive
-- [ ] Movement controls, look/look_at
-- [ ] Position tracking, health, hunger
+- [x] Bot creation API (`Leafish.create_bot`)
+- [x] Spawn/login/configuration handling
+- [x] Chat send/receive
+- [x] Movement controls, look/look_at
+- [x] Position tracking, health, hunger
 
 ## Phase 4 — World & entities
-- [ ] Chunk decoding, sections, palettes
-- [ ] Block registry & lookups
-- [ ] Entity registry & tracking
-- [ ] Raycasting / line of sight
+- [x] Chunk decoding, sections, palettes, light data
+- [x] Block registry & lookups
+- [x] Entity registry & tracking
+- [x] Raycasting / line of sight
 
 ## Phase 5 — Inventory & interaction
-- [ ] Inventory/items/windows/transactions
-- [ ] Block digging & placement
-- [ ] Containers
-- [ ] Item collection
+- [x] Inventory/items/windows/transactions
+- [x] Block digging & placement
+- [x] Containers
+- [x] Item collection
 
 ## Phase 6 — Automation
-- [ ] Crafting + recipe planner
-- [ ] Physics (movement, collision)
-- [ ] Pathfinder (A*, goals, movements)
-- [ ] Combat
-- [ ] Fishing, farming
+- [x] Crafting + recipe planner
+- [x] Physics (movement, collision)
+- [x] Pathfinder (A*, goals, movements)
+- [x] Combat
+- [x] Fishing, farming
 
 ## Phase 7 — Extensibility
-- [ ] Plugin framework
-- [ ] Multi-bot manager
-- [ ] Examples
+- [x] Plugin framework
+- [x] Multi-bot manager
+- [x] Examples
 
 ## Phase 8 — Compatibility & release
 - [ ] Additional protocol versions
 - [ ] Performance pass
-- [ ] Full documentation
+- [x] Full documentation (MkDocs)
 - [ ] Release
+
+## Parity backlog (reference_api.md)
+- [ ] Remaining bot methods/properties/events parity items
+- [ ] Typed windows (Furnace, EnchantmentTable, Villager)
+- [ ] Pathfinder goal classes
+- [ ] `bot.creative` namespace
+- [ ] Scoreboards / teams / boss bars
