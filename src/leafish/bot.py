@@ -25,6 +25,7 @@ from .modules.movement import CONTROL_STATES, MovementModule
 from .modules.pathfinder import Pathfinder
 from .modules.physics import PhysicsEngine
 from .modules.pvp import PVPModule
+from .plugins import PluginManager
 from .protocol.protodef import ProtocolCodec
 from .protocol.session import ClientSession
 from .utils.text import component_to_text, nbt_to_python
@@ -72,6 +73,7 @@ class LeafishBot:
         self.pathfinder = Pathfinder(self)
         self.pvp = PVPModule(self)
         self.fishing = FishingModule(self)
+        self.plugins = PluginManager(self)
 
         # Movement control states --------------------------------------------
         self.control_states: dict[str, bool] = {c: False for c in CONTROL_STATES}
@@ -84,6 +86,8 @@ class LeafishBot:
         self.session: ClientSession | None = None
         self._disconnect_waiters: list[asyncio.Future] = []
         self._first_position_received = False
+        self._ended = False
+        self._disconnect_task: asyncio.Task | None = None
 
     # -- event API (delegated to emitter) ----------------------------------------
 
@@ -121,13 +125,32 @@ class LeafishBot:
             access_token=self.auth.access_token,
         )
         self.physics.start()
+        self._disconnect_task = asyncio.create_task(
+            self._watch_disconnect(), name="leafish-disconnect-watch"
+        )
+
+    async def _watch_disconnect(self) -> None:
+        """Stop subsystems and emit ``end`` when the connection drops."""
+        assert self.session is not None
+        await self.session.wait_until_disconnected()
+        await self._cleanup_after_disconnect()
+
+    async def _cleanup_after_disconnect(self) -> None:
+        if self._ended:
+            return
+        self._ended = True
+        await self.physics.stop()
+        reason = "client disconnect"
+        if self.session is not None:
+            reason = self.session.state.disconnect_reason or reason
+        self.emit("end", reason)
 
     async def disconnect(self, reason: str = "client disconnect") -> None:
         """Disconnect gracefully."""
         if self.session is not None:
             await self.session.disconnect(reason)
         await self.physics.stop()
-        self.emit("end", reason)
+        await self._cleanup_after_disconnect()
 
     async def quit(self, reason: str = "client quit") -> None:
         """Alias for :meth:`disconnect`."""
@@ -700,6 +723,15 @@ class LeafishBot:
     async def stop_moving(self) -> None:
         await self.movement.stop_moving()
 
+    # -- plugins ------------------------------------------------------------------
+
+    def load_plugin(self, plugin, name: str | None = None) -> str:
+        """Load a plugin (callable ``fn(bot)`` or object with inject/unload)."""
+        return self.plugins.load(plugin, name)
+
+    def unload_plugin(self, name: str) -> bool:
+        return self.plugins.unload(name)
+
     # -- inventory ------------------------------------------------------------------------
 
     @property
@@ -801,6 +833,21 @@ class Leafish:
         await bot._start()
         bot.emit("connect")
         return bot
+
+    @staticmethod
+    async def create_bots(*configs: dict) -> list[LeafishBot]:
+        """Create several bots concurrently.
+
+        Each config is a kwargs dict for :meth:`create_bot`, e.g.::
+
+            bots = await Leafish.create_bots(
+                {"host": "localhost", "username": "Alice", "auth": "offline"},
+                {"host": "localhost", "username": "Bob", "auth": "offline"},
+            )
+        """
+        return list(await asyncio.gather(
+            *(Leafish.create_bot(**cfg) for cfg in configs)
+        ))
 
 
 def _pos_from_bitfield(loc: Any) -> BlockPos | None:

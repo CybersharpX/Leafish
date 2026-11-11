@@ -206,6 +206,29 @@ async def test_dig_and_place(server):
         await bot.quit()
 
 
+async def test_multiple_bots(server):
+    """Two independent bots can share one fake server."""
+    bots = await Leafish.create_bots(
+        {"host": "127.0.0.1", "port": server.port,
+         "username": "Alice", "auth": "offline", "version": "1.21.11"},
+        {"host": "127.0.0.1", "port": server.port,
+         "username": "Bob", "auth": "offline", "version": "1.21.11"},
+    )
+    try:
+        for bot in bots:
+            if not bot.spawned:
+                await asyncio.wait_for(bot.wait_for("spawn", timeout=2), 2)
+            assert bot.spawned
+            assert bot.entity is not None
+        assert bots[0].username == "Alice"
+        assert bots[1].username == "Bob"
+        await bots[0].chat("hi bob")
+        await asyncio.sleep(0.2)
+    finally:
+        for bot in bots:
+            await bot.quit()
+
+
 async def test_disconnect(server):
     bot = await Leafish.create_bot(
         host="127.0.0.1", port=server.port, username="B", auth="offline",

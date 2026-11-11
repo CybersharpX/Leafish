@@ -77,15 +77,18 @@ Legend: ✅ done · 🚧 partial · ⬜ not started · ❌ unsupported/known iss
 ## Phase 6 — Automation
 - ✅ Pathfinder: A* over the collision grid with step-ups, `goto`
   execution with stuck detection and replan
-- 🚧 Combat: single-target `attack`; no target selection, kiting or
-  weapon logic yet
-- ⬜ Fishing/farming
+- ✅ Combat: `bot.pvp` target acquisition + engage loop with pathfinder
+  approach and attack cooldown; `bot.attack` for single hits
+- 🚧 Fishing: `bot.fish` cast/bite/reel with best-effort bite detection
+- ⬜ Farming
 
 ## Phase 7 — Extensibility
-- ⬜ Plugin loader
-- 🚧 Multiple bot instances (each `LeafishBot` is independent; no shared
-  manager/orchestration API yet)
-- ⬜ Examples
+- ✅ Plugin loader: `bot.load_plugin` / `unload_plugin` for callables and
+  inject/unload objects
+- ✅ Multiple bot instances: independent `LeafishBot`s plus
+  `Leafish.create_bots` for concurrent creation
+- ✅ Examples: `examples/` (echo bot, goto, collector) — runnable against
+  a real server, not covered by automated tests
 
 ## Phase 8 — Compatibility & release
 - ⬜ Additional versions
