@@ -49,6 +49,15 @@ class Entity:
     health: float | None = None
     """Health when exposed via metadata; ``None`` if unknown."""
 
+    vehicle: Entity | None = None
+    """Entity this entity is riding, if any."""
+
+    passengers: list[Entity] = field(default_factory=list)
+    """Entities riding this entity."""
+
+    effects: dict[Any, dict[str, Any]] = field(default_factory=dict)
+    """Active status effects keyed by effect id."""
+
     _last_position: Vec3 | None = field(default=None, repr=False)
     _position_changed: bool = field(default=False, repr=False)
 

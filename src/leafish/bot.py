@@ -16,6 +16,7 @@ from .entities.manager import EntityManager
 from .events.emitter import EventEmitter
 from .exceptions import LeafishError
 from .inventory.inventory import Inventory
+from .inventory.item import Item
 from .modules.actions import ActionsModule
 from .modules.anvil import AnvilModule
 from .modules.chat import ChatModule
@@ -31,6 +32,7 @@ from .modules.pathfinder import Pathfinder
 from .modules.physics import PhysicsEngine
 from .modules.player import PlayerModule
 from .modules.pvp import PVPModule
+from .modules.scoreboard import BossBar, Particle, ScoreBoard, Team
 from .modules.state import (
     AbilitiesInfo,
     ExperienceInfo,
@@ -103,6 +105,14 @@ class LeafishBot:
         self._abilities = AbilitiesInfo()
         self._experience = ExperienceInfo()
         self.settings = SettingsInfo(view_distance=config.view_distance)
+
+        # Scoreboard / team / boss-bar / title state -------------------------
+        self.scoreboards: dict[str, ScoreBoard] = {}
+        self.teams: dict[str, Team] = {}
+        self.boss_bars: dict[str, BossBar] = {}
+        self._title_state: dict[str, Any] = {}
+        self._scoreboard_slots: dict[int, str] = {}
+        self.cursor_item: Item | None = None
 
         # Movement control states --------------------------------------------
         self.control_states: dict[str, bool] = {c: False for c in CONTROL_STATES}
@@ -783,6 +793,381 @@ class LeafishBot:
         text = component_to_text(nbt_to_python(params.get("reason")))
         self.emit("kicked", text)
 
+    # -- combat / damage ---------------------------------------------------------
+
+    def _packet_hurt_animation(self, params: dict[str, Any]) -> None:
+        e = self.entities.get(_entity_id(params, "entityId"))
+        if e is not None:
+            e.set_rotation(e.yaw, e.pitch, head_yaw=params.get("yaw"))
+        self.emit("entity_hurt", e, params)
+        self.emit("entity_hurt_animation", params)
+
+    def _packet_damage_event(self, params: dict[str, Any]) -> None:
+        e = self.entities.get(_entity_id(params, "entityId"))
+        self.emit("entity_hurt", e, params)
+        self.emit("entity_damaged", e, params)
+        self.emit("damage_event", params)
+
+    def _packet_death_combat_event(self, params: dict[str, Any]) -> None:
+        e = self.entities.get(_entity_id(params, "playerId"))
+        if e is not None:
+            e.health = 0.0
+        text = component_to_text(nbt_to_python(params.get("message")))
+        if e is not None and e.id == self.entity_id:
+            self.emit("death", text)
+        self.emit("entity_dead", e, text)
+        self.emit("death_combat_event", params)
+
+    def _packet_enter_combat_event(self, params: dict[str, Any]) -> None:
+        self.emit("enter_combat")
+
+    def _packet_end_combat_event(self, params: dict[str, Any]) -> None:
+        self.emit("end_combat", params.get("duration"))
+
+    def _packet_animation(self, params: dict[str, Any]) -> None:
+        e = self.entities.get(_entity_id(params, "entityId"))
+        if e is not None:
+            self.emit("entity_swing_arm", e)
+        self.emit("animation", params)
+
+    # -- item pickup ---------------------------------------------------------------
+
+    def _packet_collect(self, params: dict[str, Any]) -> None:
+        collected = self.entities.get(_entity_id(params, "collectedEntityId"))
+        collector = self.entities.get(_entity_id(params, "collectorEntityId"))
+        count = int(params.get("pickupItemCount", 1))
+        self.emit("player_collect", collector, collected, count)
+        self.emit("item_collected", collected, collector, count)
+        if collected is not None:
+            self.entities.destroy([collected.id])
+            self.emit("entity_destroy", collected)
+
+    # -- block actions ---------------------------------------------------------------
+
+    def _packet_block_action(self, params: dict[str, Any]) -> None:
+        pos = _pos_from_bitfield(params.get("location"))
+        block = self.world.block_at(pos) if pos is not None else None
+        name = (block.name if block is not None else "") or ""
+        byte1 = int(params.get("byte1", 0))
+        byte2 = int(params.get("byte2", 0))
+        if "piston" in name:
+            self.emit("piston_move", block, byte1 == 0, byte2)
+        elif "note_block" in name:
+            self.emit("note_heard", block, byte1, byte2)
+        elif any(k in name for k in (
+            "chest", "barrel", "shulker", "furnace", "hopper",
+            "dispenser", "dropper", "brewing", "enchanting", "anvil",
+            "trapped_chest", "ender_chest",
+        )):
+            self.emit("chest_lid_move", block, bool(byte1), byte2)
+        self.emit("block_action", block, params)
+
+    def _packet_block_break_animation(self, params: dict[str, Any]) -> None:
+        pos = _pos_from_bitfield(params.get("location"))
+        block = self.world.block_at(pos) if pos is not None else None
+        stage = int(params.get("destroyStage", 0))
+        if stage < 0:
+            self.emit("block_break_progress_end", block, params.get("entityId"))
+        else:
+            self.emit(
+                "block_break_progress_observed",
+                block, stage, params.get("entityId"),
+            )
+
+    # -- vehicles -------------------------------------------------------------------
+
+    def _packet_attach_entity(self, params: dict[str, Any]) -> None:
+        e = self.entities.get(_entity_id(params, "entityId"))
+        vehicle_id = int(params.get("vehicleId", -1))
+        if e is not None:
+            vehicle = self.entities.get(vehicle_id) if vehicle_id >= 0 else None
+            e.vehicle = vehicle
+            if e.id == self.entity_id:
+                self.player.vehicle = vehicle
+                if vehicle is None:
+                    self.emit("dismount", None)
+                else:
+                    self.emit("mount", vehicle)
+        self.emit("entity_attach", e, vehicle_id)
+
+    def _packet_set_passengers(self, params: dict[str, Any]) -> None:
+        e = self.entities.get(_entity_id(params, "entityId"))
+        passengers = [
+            self.entities.get(pid) for pid in params.get("passengers", [])
+        ]
+        if e is not None:
+            e.passengers = [p for p in passengers if p is not None]
+        self.emit("entity_passengers", e, passengers)
+
+    # -- titles ---------------------------------------------------------------------
+
+    def _packet_set_title_text(self, params: dict[str, Any]) -> None:
+        text = component_to_text(nbt_to_python(params.get("text")))
+        self._title_state["text"] = text
+        self.emit("title", text, "title")
+
+    def _packet_set_title_subtitle(self, params: dict[str, Any]) -> None:
+        text = component_to_text(nbt_to_python(params.get("text")))
+        self._title_state["subtitle"] = text
+        self.emit("title", text, "subtitle")
+
+    def _packet_set_title_time(self, params: dict[str, Any]) -> None:
+        times = (
+            int(params.get("fadeIn", 0)),
+            int(params.get("stay", 0)),
+            int(params.get("fadeOut", 0)),
+        )
+        self._title_state.update(
+            {"fadeIn": times[0], "stay": times[1], "fadeOut": times[2]}
+        )
+        self.emit("title_times", *times)
+
+    def _packet_clear_titles(self, params: dict[str, Any]) -> None:
+        self._title_state.clear()
+        self.emit("title_clear", bool(params.get("reset", True)))
+
+    # -- particles / sounds -----------------------------------------------------------
+
+    def _packet_world_particles(self, params: dict[str, Any]) -> None:
+        particle_obj = params.get("particle")
+        particle_id = (
+            particle_obj.get("id") if isinstance(particle_obj, dict)
+            else particle_obj
+        )
+        particle = Particle(
+            particle_id=particle_id,
+            name=_sound_name(particle_id),
+            position=Vec3(
+                float(params.get("x", 0)),
+                float(params.get("y", 0)),
+                float(params.get("z", 0)),
+            ),
+            offset=Vec3(
+                float(params.get("offsetX", 0)),
+                float(params.get("offsetY", 0)),
+                float(params.get("offsetZ", 0)),
+            ),
+            max_speed=float(params.get("velocityOffset", 0) or 0),
+            count=int(params.get("amount", 0) or 0),
+            long_distance_render=bool(params.get("longDistance", False)),
+            always_show=bool(params.get("alwaysShow", False)),
+            data=particle_obj.get("data") if isinstance(particle_obj, dict) else None,
+        )
+        self.emit("particle", particle)
+        self.emit("world_particles", params)
+
+    def _packet_sound_effect(self, params: dict[str, Any]) -> None:
+        name = _sound_name(params.get("sound"))
+        pos = Vec3(
+            int(params.get("x", 0)) / 8.0,
+            int(params.get("y", 0)) / 8.0,
+            int(params.get("z", 0)) / 8.0,
+        )
+        self.emit(
+            "sound_effect_heard", name, pos,
+            float(params.get("volume", 1.0)), float(params.get("pitch", 1.0)),
+        )
+        self.emit("sound_effect", params)
+
+    def _packet_entity_sound_effect(self, params: dict[str, Any]) -> None:
+        name = _sound_name(params.get("sound"))
+        e = self.entities.get(_entity_id(params, "entityId"))
+        self.emit(
+            "entity_sound_effect_heard", name, e,
+            float(params.get("volume", 1.0)), float(params.get("pitch", 1.0)),
+        )
+        self.emit("entity_sound_effect", params)
+
+    def _packet_entity_effect(self, params: dict[str, Any]) -> None:
+        e = self.entities.get(_entity_id(params, "entityId"))
+        effect = {
+            "id": params.get("effectId"),
+            "amplifier": params.get("amplifier"),
+            "duration": params.get("duration"),
+            "flags": params.get("flags"),
+        }
+        if e is not None:
+            e.effects[effect["id"]] = effect
+        self.emit("entity_effect", e, effect)
+
+    def _packet_remove_entity_effect(self, params: dict[str, Any]) -> None:
+        e = self.entities.get(_entity_id(params, "entityId"))
+        eid = params.get("effectId")
+        if e is not None:
+            e.effects.pop(eid, None)
+        self.emit("entity_effect_end", e, eid)
+        self.emit("remove_entity_effect", params)
+
+    # -- scoreboard / teams / boss bars ------------------------------------------------
+
+    def _packet_boss_bar(self, params: dict[str, Any]) -> None:
+        uuid = params.get("entityUUID")
+        action = int(params.get("action", 0))
+        bar = self.boss_bars.get(str(uuid))
+        if action == 0:  # add
+            bar = BossBar(uuid=uuid or "")
+            self.boss_bars[str(uuid)] = bar
+            self._apply_boss_bar(bar, params)
+            self.emit("boss_bar_created", bar)
+        elif action == 1:  # remove
+            bar = self.boss_bars.pop(str(uuid), None)
+            if bar is not None:
+                self.emit("boss_bar_deleted", bar)
+        elif bar is not None:
+            self._apply_boss_bar(bar, params)
+            self.emit("boss_bar_updated", bar)
+
+    def _apply_boss_bar(self, bar: BossBar, params: dict[str, Any]) -> None:
+        if "title" in params:
+            bar.title = _component_text(params.get("title"))
+        if "health" in params:
+            bar.health = float(params.get("health", bar.health))
+        if "color" in params:
+            bar.color = params.get("color")
+        if "dividers" in params:
+            bar.division = int(params.get("dividers", bar.division))
+        if "flags" in params:
+            flags = int(params.get("flags", 0))
+            bar.flags = flags
+            bar.darkened_sky = bool(flags & 0x01)
+            bar.dragon_bar = bool(flags & 0x02)
+            bar.create_fog = bool(flags & 0x04)
+
+    def _packet_teams(self, params: dict[str, Any]) -> None:
+        name = params.get("team", "")
+        mode = params.get("mode")
+        mode_name = mode if isinstance(mode, str) else str(mode)
+        if mode_name == "add":
+            team = Team(name=name)
+            self._apply_team_fields(team, params)
+            self.teams[name] = team
+            self.emit("team_created", team)
+        elif mode_name == "remove":
+            team = self.teams.pop(name, None)
+            if team is not None:
+                self.emit("team_removed", team)
+        elif mode_name == "change":
+            team = self.teams.get(name)
+            if team is not None:
+                self._apply_team_fields(team, params)
+                self.emit("team_updated", team)
+        elif mode_name in ("join", "leave"):
+            team = self.teams.get(name)
+            if team is None:
+                return
+            for pname in params.get("players", []) or []:
+                if mode_name == "join":
+                    team.members.add(pname)
+                    self.emit("team_member_added", team, pname)
+                else:
+                    team.members.discard(pname)
+                    self.emit("team_member_removed", team, pname)
+
+    def _apply_team_fields(self, team: Team, params: dict[str, Any]) -> None:
+        team.display_name = _component_text(params.get("name")) or team.name
+        flags = params.get("flags")
+        if isinstance(flags, dict):
+            team.friendly_fire = int(bool(flags.get("friendly_fire")))
+        elif flags is not None:
+            team.friendly_fire = int(flags)
+        if params.get("nameTagVisibility") is not None:
+            team.name_tag_visibility = params.get("nameTagVisibility")
+        if params.get("formatting") is not None:
+            team.color = params.get("formatting")
+        if params.get("collisionRule") is not None:
+            team.collision_rule = params.get("collisionRule")
+        team.prefix = _component_text(params.get("prefix"))
+        team.suffix = _component_text(params.get("suffix"))
+
+    @property
+    def team_map(self) -> dict[str, Team]:
+        """Teams keyed by team name."""
+        return dict(self.teams)
+
+    def _packet_scoreboard_objective(self, params: dict[str, Any]) -> None:
+        name = params.get("name", "")
+        action = int(params.get("action", 0))
+        if action == 1:  # remove
+            board = self.scoreboards.pop(name, None)
+            if board is not None:
+                self.emit("scoreboard_deleted", board)
+            return
+        board = self.scoreboards.get(name)
+        if board is None:
+            board = ScoreBoard(name=name)
+            self.scoreboards[name] = board
+            self.emit("scoreboard_created", board)
+        if "displayText" in params:
+            board.title = _component_text(params.get("displayText"))
+        if "type" in params:
+            board.type = params.get("type")
+        self.emit("scoreboard_title_changed", board)
+
+    def _packet_scoreboard_display_objective(self, params: dict[str, Any]) -> None:
+        position = int(params.get("position", 0))
+        name = params.get("name", "")
+        self._scoreboard_slots[position] = name
+        board = self.scoreboards.get(name)
+        self.emit("scoreboard_position", position, board or name)
+
+    def _packet_scoreboard_score(self, params: dict[str, Any]) -> None:
+        score_name = params.get("scoreName", "")
+        board = self.scoreboards.get(score_name)
+        if board is None:
+            return
+        item = board.update(params)
+        self.emit("score_updated", board, item)
+
+    def _packet_reset_score(self, params: dict[str, Any]) -> None:
+        entity_name = params.get("entity_name", "")
+        objective = params.get("objective_name")
+        if objective is None:
+            for board in self.scoreboards.values():
+                for key in [k for k, v in board.items_map.items()
+                            if v.name == entity_name]:
+                    board.items_map.pop(key, None)
+        else:
+            board = self.scoreboards.get(objective)
+            if board is not None:
+                for key in [k for k, v in board.items_map.items()
+                            if v.name == entity_name]:
+                    board.items_map.pop(key, None)
+        self.emit("score_removed", entity_name, objective)
+
+    @property
+    def scoreboard(self):
+        """The sidebar scoreboard (position 1) when present."""
+        name = self._scoreboard_slots.get(1)
+        return self.scoreboards.get(name) if name else None
+
+    # -- misc packets -----------------------------------------------------------------
+
+    def _packet_update_view_distance(self, params: dict[str, Any]) -> None:
+        vd = params.get("viewDistance")
+        if vd is not None:
+            self.settings.view_distance = int(vd)
+            self._game.view_distance = int(vd)
+        self.emit("update_view_distance", params)
+
+    def _packet_set_cursor_item(self, params: dict[str, Any]) -> None:
+        item = Item.from_slot(params.get("contents", {}))
+        if item is not None and item.item_id is not None and item.name is None:
+            item.name = self.world.gamedata.item_name(item.item_id)
+        self.cursor_item = item
+        self.emit("cursor_item", item)
+
+    def _packet_tags(self, params: dict[str, Any]) -> None:
+        self.emit("tags", params)
+
+    def _packet_open_book(self, params: dict[str, Any]) -> None:
+        self.emit("open_book", params)
+
+    def _packet_map(self, params: dict[str, Any]) -> None:
+        self.emit("map", params)
+
+    def _packet_chat_suggestions(self, params: dict[str, Any]) -> None:
+        self.emit("chat_suggestions", params)
+
     # -- lookups ---------------------------------------------------------------------
 
     def _player_name(self, uuid_str: str | None) -> str | None:
@@ -1421,3 +1806,37 @@ def _pos_from_bitfield(loc: Any) -> BlockPos | None:
         return BlockPos(int(loc["x"]), int(loc["y"]), int(loc["z"]))
     except (KeyError, TypeError, ValueError):
         return None
+
+
+def _entity_id(params: dict[str, Any], key: str) -> int:
+    """Extract an entity id, returning -1 (never a real id) when absent."""
+    value = params.get(key)
+    return int(value) if value is not None else -1
+
+
+def _sound_name(value: Any) -> str | None:
+    """Extract a sound/particle/holder name from a decoded value."""
+    if value is None:
+        return None
+    if isinstance(value, str):
+        return value
+    if isinstance(value, dict):
+        for key in ("id", "name", "value", "key"):
+            v = value.get(key)
+            if isinstance(v, str):
+                return v
+            if isinstance(v, dict) and "value" in v:
+                return str(v["value"])
+    return str(value)
+
+
+def _component_text(value: Any) -> str:
+    """Best-effort chat-component/NBT -> plain text extraction."""
+    if value is None:
+        return ""
+    if isinstance(value, str):
+        return value
+    try:
+        return component_to_text(nbt_to_python(value)) or ""
+    except Exception:
+        return ""
