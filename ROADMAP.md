@@ -60,8 +60,11 @@
 - [ ] Release
 
 ## Parity backlog (reference_api.md)
-- [ ] Remaining bot methods/properties/events parity items
-- [ ] Typed windows (Furnace, EnchantmentTable, Villager)
-- [ ] Pathfinder goal classes
-- [ ] `bot.creative` namespace
-- [ ] Scoreboards / teams / boss bars
+- [x] Typed windows (Furnace, EnchantmentTable, Villager, Anvil, Horse)
+- [x] Pathfinder goal classes (`leafish.pathfinder.goals`)
+- [x] `bot.creative` namespace
+- [x] Scoreboards / teams / boss bars / particles
+- [x] Bot state objects (game/time/XP/abilities/weather/settings)
+- [x] Plugin `@plugin` decorator with dependencies + override guard
+- [ ] Remaining niche parity items: recipe-book UI sync, map data,
+  boss-bar style edge cases, entity AI/attribute behaviors

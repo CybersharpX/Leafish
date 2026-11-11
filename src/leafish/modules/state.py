@@ -95,6 +95,16 @@ class AbilitiesInfo:
 
 
 @dataclass
+class WeatherInfo:
+    """Weather state derived from ``game_state_change`` packets."""
+
+    raining: bool = False
+    thundering: bool = False
+    rain_level: float = 0.0
+    thunder_level: float = 0.0
+
+
+@dataclass
 class SettingsInfo:
     """Client settings reported/configured for the bot."""
 

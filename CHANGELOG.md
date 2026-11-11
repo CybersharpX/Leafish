@@ -39,3 +39,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (`bot.repair`) with fake-server anvil simulation.
 - Fake protocol server + end-to-end integration tests.
 - `tools/fetch_mcdata.py` for vendoring minecraft-data JSON.
+- Complete interaction surface: `use_item`, `consume`,
+  `activate_item`/`deactivate_item`, entity/block interactions,
+  signs, books, tab-complete, resource packs, respawn, sleep/wake,
+  elytra, mount/dismount/vehicle steering.
+- Bot state objects & properties: game info, abilities, world time,
+  experience, weather, settings, physics toggle, scoreboard/team/
+  boss-bar collections.
+- Typed windows (`bot.open_window` → `FurnaceWindow`,
+  `EnchantmentTableWindow`, `AnvilWindow`, `VillagerWindow`,
+  `HorseWindow`) with progress/trade/rename APIs.
+- `bot.creative` namespace for creative-mode inventory ops.
+- `leafish.pathfinder` goals package (`GoalNear`, `GoalFollow`,
+  `GoalComposite`, ...) with dynamic-goal replanning.
+- `@plugin` decorator with dependencies and override protection.
+- New packet handlers: boss bars, teams, scoreboards, titles,
+  particles, sounds, vehicles, block actions, item pickup, combat
+  events, window properties, trades, horse windows.
+- Chunk light accessors (`world.light_at`), entity bounding boxes,
+  tool-aware dig times.
+- Fixed: `Particle` data switch missing `default: void` in vendored
+  protocol data (broke particle encode/decode).

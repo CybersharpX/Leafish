@@ -41,6 +41,7 @@ from .modules.state import (
     GameInfo,
     SettingsInfo,
     TimeInfo,
+    WeatherInfo,
 )
 from .modules.windows import (
     AnvilWindow,
@@ -113,6 +114,7 @@ class LeafishBot:
         self._abilities = AbilitiesInfo()
         self._experience = ExperienceInfo()
         self.settings = SettingsInfo(view_distance=config.view_distance)
+        self._weather = WeatherInfo()
 
         # Scoreboard / team / boss-bar / title state -------------------------
         self.scoreboards: dict[str, ScoreBoard] = {}
@@ -720,7 +722,22 @@ class LeafishBot:
         self.emit("game_state_change", reason, params.get("gameMode"))
         if reason in ("start_raining", "stop_raining", "rain_level_change",
                       "thunder_level_change"):
-            self.world.set_weather({"raining": reason == "start_raining"})
+            # The packet's gameMode field carries the 0-1 level for the
+            # *_level_change reasons.
+            value = params.get("gameMode")
+            w = self.world.weather
+            if reason in ("start_raining", "stop_raining"):
+                self.world.set_weather(
+                    {"raining": reason == "start_raining"})
+            self._weather.raining = bool(w.get("raining", self._weather.raining))
+            self._weather.thundering = reason == "thunder_level_change" or bool(
+                w.get("thundering", self._weather.thundering))
+            if reason == "rain_level_change" and value is not None:
+                self._weather.rain_level = float(value)
+                w["rain_level"] = float(value)
+            if reason == "thunder_level_change" and value is not None:
+                self._weather.thunder_level = float(value)
+                w["thunder_level"] = float(value)
             self.emit("weather_update", self.world.weather)
 
     def _packet_update_time(self, params: dict[str, Any]) -> None:
@@ -1272,6 +1289,10 @@ class LeafishBot:
     async def command(self, command: str) -> None:
         await self.chat_module.command(command)
 
+    async def chat_command(self, command: str) -> None:
+        """Alias for :meth:`command`."""
+        await self.command(command)
+
     # -- movement -----------------------------------------------------------------------
 
     async def set_control_state(self, control: str, value: bool) -> None:
@@ -1742,9 +1763,19 @@ class LeafishBot:
         return self.vitals.food_saturation
 
     @property
+    def oxygen(self) -> int | None:
+        """Alias for :attr:`oxygen_level`."""
+        return self.oxygen_level
+
+    @property
     def oxygen_level(self) -> int | None:
         """Breath/air level; ``None`` — modern servers don't send it."""
         return None
+
+    @property
+    def weather(self) -> WeatherInfo:
+        """Current weather state (raining, thunder, levels)."""
+        return self._weather
 
     @property
     def experience(self) -> ExperienceInfo:
