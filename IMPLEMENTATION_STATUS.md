@@ -105,6 +105,7 @@ Legend: ✅ done · 🚧 partial · ⬜ not started · ❌ unsupported/known iss
 | Minecraft version | Protocol | Status |
 |---|---|---|
 | Java 1.21.11 | 774 | 🚧 connect/spawn/chat/move verified vs fake server; real-server validation pending |
+| Java 1.21.4 | 769 | 🚧 connect/spawn/chat smoke test vs fake server |
 
 ## Known limitations / bugs
 - Chunk light data is stored but not exposed; chunk data does not yet

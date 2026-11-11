@@ -248,3 +248,25 @@ async def test_unimplemented_methods_raise(server):
             await bot.dig(None)
     finally:
         await bot.quit()
+
+
+async def test_connect_version_1_21_4():
+    """Smoke test: the data-driven stack works for a second version."""
+    srv = FakeMinecraftServer(version="1.21.4")
+    await srv.start()
+    try:
+        bot = await Leafish.create_bot(
+            host="127.0.0.1", port=srv.port, username="V214Bot",
+            auth="offline", version="1.21.4",
+        )
+        try:
+            if not bot.spawned:
+                await asyncio.wait_for(bot.wait_for("spawn", timeout=3), 3)
+            assert bot.spawned
+            assert bot.entity is not None
+            await bot.chat("hello from 1.21.4")
+            await asyncio.sleep(0.2)
+        finally:
+            await bot.quit()
+    finally:
+        await srv.stop()
