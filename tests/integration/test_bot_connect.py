@@ -121,6 +121,91 @@ async def test_chunk_column_load(server):
         await bot.quit()
 
 
+async def test_dig_and_place(server):
+    """Bot digs a stone block and places a dirt block against it."""
+    gd = get_gamedata("1.21.11")
+    air_id = gd.block_state_id("air")
+    stone_id = gd.block_state_id("stone")
+    dirt_id = gd.block_state_id("dirt")
+    dirt_item = gd.item_by_name("dirt")
+    assert air_id is not None and stone_id is not None
+    assert dirt_id is not None and dirt_item is not None
+    dirt_item_id = dirt_item["id"]
+
+    chunk_bytes = air_chunk_data(
+        24, air_id, fill_state=stone_id, fill_section_index=8
+    )
+    server.spawn_packets.extend([
+        ("map_chunk", {
+            "x": 0, "z": 0, "heightmaps": [], "chunkData": chunk_bytes,
+            "blockEntities": [], "skyLightMask": [], "blockLightMask": [],
+            "emptySkyLightMask": [], "emptyBlockLightMask": [],
+            "skyLight": [], "blockLight": [],
+        }),
+        # Give the bot a stack of dirt in hotbar slot 0 (window slot 36).
+        ("set_player_inventory", {
+            "slotId": 36,
+            "contents": {
+                "itemCount": 64, "itemId": dirt_item_id,
+                "addedComponentCount": 0, "removedComponentCount": 0,
+                "components": [], "removeComponents": [],
+            },
+        }),
+    ])
+
+    dig_finished = asyncio.Event()
+
+    async def on_packet(conn, name, params):
+        if name == "block_dig" and params.get("status") == 2:
+            # Acknowledge the dig by turning the block to air.
+            loc = params["location"]
+            await conn.send("block_change", {
+                "location": loc, "type": air_id,
+            })
+            dig_finished.set()
+        if name == "block_place":
+            # Place dirt on the face that was clicked.
+            loc = params["location"]
+            direction = params.get("direction", 1)
+            deltas = {0: (0, -1, 0), 1: (0, 1, 0), 2: (0, 0, -1),
+                      3: (0, 0, 1), 4: (-1, 0, 0), 5: (1, 0, 0)}
+            dx, dy, dz = deltas.get(direction, (0, 1, 0))
+            await conn.send("block_change", {
+                "location": {
+                    "x": loc["x"] + dx, "y": loc["y"] + dy, "z": loc["z"] + dz,
+                },
+                "type": dirt_id,
+            })
+
+    server.on_client_packet = on_packet
+
+    bot = await Leafish.create_bot(
+        host="127.0.0.1", port=server.port, username="Digger",
+        auth="offline", version="1.21.11",
+    )
+    try:
+        if not bot.spawned:
+            await asyncio.wait_for(bot.wait_for("spawn", timeout=2), 2)
+        for _ in range(50):
+            if bot.world.chunk_at(0, 0) is not None and bot.inventory.held_item:
+                break
+            await asyncio.sleep(0.05)
+
+        bot.game_mode = "creative"  # instant dig for the test
+
+        target = BlockPos(1, 64, 0)  # inside the all-stone section
+        await bot.dig(target)
+        await asyncio.wait_for(dig_finished.wait(), 3)
+
+        # Place dirt into the hole we just dug (west face of neighbor stone).
+        await bot.place_block(BlockPos(2, 64, 0), face="west")
+        await asyncio.sleep(0.2)
+        placed = bot.block_at(BlockPos(1, 64, 0))
+        assert placed is not None and placed.name == "dirt"
+    finally:
+        await bot.quit()
+
+
 async def test_disconnect(server):
     bot = await Leafish.create_bot(
         host="127.0.0.1", port=server.port, username="B", auth="offline",

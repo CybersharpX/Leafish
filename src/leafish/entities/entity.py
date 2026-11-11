@@ -31,6 +31,8 @@ class Entity:
     pitch: float = 0.0
     head_yaw: float = 0.0
     on_ground: bool = False
+    eye_height: float = 1.62
+    """Height of the entity's eyes above its position (for raycasts)."""
 
     metadata: dict[str, Any] = field(default_factory=dict)
     """Entity metadata entries keyed by metadata index."""

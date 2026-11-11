@@ -16,6 +16,7 @@ from .entities.manager import EntityManager
 from .events.emitter import EventEmitter
 from .exceptions import LeafishError
 from .inventory.inventory import Inventory
+from .modules.actions import ActionsModule
 from .modules.chat import ChatModule
 from .modules.health import HealthModule
 from .modules.movement import CONTROL_STATES, MovementModule
@@ -62,12 +63,14 @@ class LeafishBot:
         self.movement = MovementModule(self)
         self.health = HealthModule(self)
         self.chat_module = ChatModule(self)
+        self.actions = ActionsModule(self)
 
         # Movement control states --------------------------------------------
         self.control_states: dict[str, bool] = {c: False for c in CONTROL_STATES}
 
         # Window state --------------------------------------------------------
         self.current_window_id: int | None = None
+        self.inventory_state_id: int = 0
 
         # Session -------------------------------------------------------------
         self.session: ClientSession | None = None
@@ -342,6 +345,8 @@ class LeafishBot:
         self.emit("inventory_update")
 
     def _packet_set_slot(self, params: dict[str, Any]) -> None:
+        if params.get("windowId", 0) == 0:
+            self.inventory_state_id = int(params.get("stateId", 0))
         self.inventory.update_slot(
             int(params.get("windowId", 0)),
             int(params.get("slot", 0)),
@@ -350,6 +355,8 @@ class LeafishBot:
         self.emit("inventory_update")
 
     def _packet_window_items(self, params: dict[str, Any]) -> None:
+        if params.get("windowId", 0) == 0:
+            self.inventory_state_id = int(params.get("stateId", 0))
         self.inventory.update_contents(
             int(params.get("windowId", 0)),
             params.get("items", []),
@@ -681,22 +688,22 @@ class LeafishBot:
     async def set_quick_bar_slot(self, slot: int) -> None:
         await self.inventory.set_held_slot(slot)
 
-    # -- not-yet-implemented API (explicit, honest failures) -------------------------------
+    # -- world actions ------------------------------------------------------------------
 
     async def dig(self, block, force: bool = False):
-        raise LeafishError("dig() is not implemented yet")
+        await self.actions.dig(block, force=force)
 
     async def stop_digging(self):
-        raise LeafishError("stop_digging() is not implemented yet")
+        await self.actions.stop_digging()
 
     async def place_block(self, block, face=None):
-        raise LeafishError("place_block() is not implemented yet")
+        await self.actions.place_block(block, face)
 
     async def attack(self, entity):
-        raise LeafishError("attack() is not implemented yet")
+        await self.actions.attack(entity)
 
     async def equip(self, item, destination: str | None = None):
-        raise LeafishError("equip() is not implemented yet")
+        await self.actions.equip(item, destination)
 
     async def consume(self):
         raise LeafishError("consume() is not implemented yet")
