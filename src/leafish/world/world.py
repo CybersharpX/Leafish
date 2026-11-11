@@ -9,11 +9,83 @@ from ..data.registry import GameData, get_gamedata
 from ..utils.geometry import raycast_voxels
 from ..utils.vectors import BlockPos, Vec3
 from .block import Block
+from .chunk_codec import (
+    BIOME_SECTION_VOLUME,
+    BLOCK_SECTION_VOLUME,
+    ChunkSectionData,
+    PalettedContainer,
+)
 
 if TYPE_CHECKING:
     from ..bot import LeafishBot
 
 log = logging.getLogger("leafish.world")
+
+
+class ChunkSection:
+    """One 16x16x16 section of blocks (paletted container storage)."""
+
+    __slots__ = ("biomes", "blocks", "fluid_count", "non_air_count", "states", "y")
+
+    def __init__(
+        self,
+        y: int,
+        blocks: PalettedContainer | None = None,
+        biomes: PalettedContainer | None = None,
+        non_air_count: int = 0,
+        fluid_count: int = 0,
+    ) -> None:
+        self.y = y
+        # ``states`` is a lazily materialized list used after local edits;
+        # while ``None`` the packed ``blocks`` container is authoritative.
+        self.states: list[int] | None = None
+        self.blocks = blocks
+        self.biomes = biomes
+        self.non_air_count = non_air_count
+        self.fluid_count = fluid_count
+
+    @classmethod
+    def from_data(cls, data: ChunkSectionData) -> ChunkSection:
+        return cls(
+            data.y,
+            blocks=data.block_states,
+            biomes=data.biomes,
+            non_air_count=data.non_air_count,
+            fluid_count=data.fluid_count,
+        )
+
+    # -- block states ---------------------------------------------------------
+
+    def get_state(self, index: int) -> int:
+        """Global block-state id at section-local *index* (0..4095)."""
+        if self.states is not None:
+            return self.states[index]
+        if self.blocks is None:
+            return 0
+        return self.blocks.get(index)
+
+    def iter_states(self):
+        if self.states is not None:
+            return iter(self.states)
+        if self.blocks is None:
+            return iter([0] * BLOCK_SECTION_VOLUME)
+        return self.blocks.values()
+
+    def set_state(self, index: int, state_id: int) -> None:
+        if self.states is None:
+            # Materialize once so subsequent edits stay cheap.
+            self.states = (
+                self.blocks.to_list() if self.blocks is not None else [0] * BLOCK_SECTION_VOLUME
+            )
+        self.states[index] = state_id
+
+    # -- biomes -----------------------------------------------------------------
+
+    def biome_at(self, index: int) -> int:
+        """Biome registry id at biome-cell *index* (0..63)."""
+        if self.biomes is None:
+            return 0
+        return self.biomes.get(index)
 
 
 class Chunk:
@@ -29,19 +101,6 @@ class Chunk:
         self.heightmaps: dict[str, Any] = {}
 
 
-class ChunkSection:
-    """One 16x16x16 section of blocks (palette + packed indices)."""
-
-    __slots__ = ("block_states", "data", "non_air_count", "palette", "y")
-
-    def __init__(self, y: int) -> None:
-        self.y = y
-        self.block_states: list[int] = []
-        self.palette: list[int] = []
-        self.data: list[int] = []
-        self.non_air_count = 0
-
-
 class World:
     """The bot's view of the Minecraft world."""
 
@@ -55,6 +114,53 @@ class World:
         self.weather: dict[str, Any] = {}
         self.min_y: int = -64
         self.height: int = 384
+        # Registry data captured during the configuration state.
+        self.dimension_types: dict[str, dict[str, Any]] = {}
+        self.dimensions: dict[str, dict[str, Any]] = {}
+        self.biome_count: int = 0
+
+    # -- dimensions ---------------------------------------------------------------
+
+    @property
+    def min_section_y(self) -> int:
+        return self.min_y >> 4
+
+    @property
+    def section_count(self) -> int:
+        return self.height >> 4
+
+    def set_dimension_bounds(self, min_y: int, height: int) -> None:
+        """Update vertical bounds (from the dimension_type registry)."""
+        if min_y != self.min_y or height != self.height:
+            self.min_y, self.height = min_y, height
+            # Bounds changed: previously decoded sections may be misaligned.
+            self.chunks.clear()
+
+    def apply_dimension(self, name: str | None, dimension_id: int | None = None) -> None:
+        """Select the active dimension's vertical bounds from registries."""
+        dim_type_key: str | None = None
+        entry = self.dimensions.get(name) if name else None
+        if entry is not None:
+            dim_type_key = entry.get("type")
+        if dim_type_key is None and dimension_id is not None:
+            # Fallback: dimension varint indexes the registry entry order.
+            keys = list(self.dimensions)
+            if 0 <= dimension_id < len(keys):
+                dim_type_key = self.dimensions[keys[dimension_id]].get("type")
+        if dim_type_key is None and name in self.dimension_types:
+            dim_type_key = name
+        if dim_type_key is None:
+            # Vanilla overworld defaults.
+            self.set_dimension_bounds(-64, 384)
+            return
+        info = self.dimension_types.get(dim_type_key)
+        if info is None:
+            self.set_dimension_bounds(-64, 384)
+            return
+        min_y = int(info.get("min_y", -64))
+        height = int(info.get("height", 384))
+        self.set_dimension_bounds(min_y, height)
+        self.dimension = name
 
     # -- chunks -----------------------------------------------------------------
 
@@ -68,6 +174,26 @@ class World:
             self.chunks[(cx, cz)] = chunk
         return chunk
 
+    def load_chunk_data(
+        self,
+        cx: int,
+        cz: int,
+        sections: list[ChunkSectionData],
+        *,
+        heightmaps: dict[str, Any] | None = None,
+        block_entities: list[dict] | None = None,
+    ) -> Chunk:
+        """Store a fully decoded chunk column."""
+        chunk = self.load_chunk(cx, cz)
+        chunk.sections = {
+            s.y: ChunkSection.from_data(s) for s in sections
+        }
+        if heightmaps is not None:
+            chunk.heightmaps = heightmaps
+        if block_entities is not None:
+            chunk.block_entities = block_entities
+        return chunk
+
     def unload_chunk(self, cx: int, cz: int) -> None:
         self.chunks.pop((cx, cz), None)
 
@@ -75,27 +201,28 @@ class World:
 
     def block_at(self, pos: BlockPos | Vec3 | tuple) -> Block | None:
         """Return the Block at *pos*, or ``None`` if the chunk isn't loaded."""
-        if isinstance(pos, Vec3):
-            bp = pos.floor()
-        elif isinstance(pos, tuple):
-            bp = BlockPos(*pos)
-        else:
-            bp = pos
+        bp = self._to_block_pos(pos)
         chunk = self.chunk_at(bp.x >> 4, bp.z >> 4)
         if chunk is None:
             return None
         section_y = bp.y >> 4
         section = chunk.sections.get(section_y)
-        if section is None or not section.block_states:
+        if section is None:
             return self._block_for_state(0, bp)
         lx = bp.x & 15
         ly = bp.y & 15
         lz = bp.z & 15
         idx = (ly << 8) | (lz << 4) | lx
-        if idx >= len(section.block_states):
-            return self._block_for_state(0, bp)
-        state_id = section.block_states[idx]
+        state_id = section.get_state(idx)
         return self._block_for_state(state_id, bp)
+
+    @staticmethod
+    def _to_block_pos(pos: BlockPos | Vec3 | tuple) -> BlockPos:
+        if isinstance(pos, Vec3):
+            return pos.floor()
+        if isinstance(pos, tuple):
+            return BlockPos(*pos)
+        return pos
 
     def _block_for_state(self, state_id: int, pos: BlockPos) -> Block | None:
         resolved = self.gamedata.block_state(state_id)
@@ -120,7 +247,7 @@ class World:
 
     def set_block_state(self, pos: BlockPos | Vec3, state_id: int) -> None:
         """Update the local block state at *pos* (from block_update packets)."""
-        bp = pos.floor() if isinstance(pos, Vec3) else pos
+        bp = self._to_block_pos(pos)
         chunk = self.chunk_at(bp.x >> 4, bp.z >> 4)
         if chunk is None:
             return
@@ -130,8 +257,7 @@ class World:
             return
         lx, ly, lz = bp.x & 15, bp.y & 15, bp.z & 15
         idx = (ly << 8) | (lz << 4) | lx
-        if idx < len(section.block_states):
-            section.block_states[idx] = state_id
+        section.set_state(idx, state_id)
 
     def find_blocks(
         self,
@@ -147,11 +273,10 @@ class World:
         wanted.discard(None)
         origin = self.bot.entity.position.floor() if self.bot.entity else BlockPos(0, 0, 0)
         found: list[BlockPos] = []
+        limit = count * 4 if count else 1_000_000
         for (cx, cz), chunk in self.chunks.items():
             for section in chunk.sections.values():
-                if not section.block_states:
-                    continue
-                for idx, sid in enumerate(section.block_states):
+                for idx, sid in enumerate(section.iter_states()):
                     if sid not in wanted:
                         continue
                     ly = idx >> 8
@@ -166,7 +291,7 @@ class World:
                     if pos.distance_squared_to(origin) > max_distance ** 2:
                         continue
                     found.append(pos)
-                    if len(found) >= count * 4:
+                    if len(found) >= limit:
                         return found[:count] if count else found
         return found[:count] if count else found
 
@@ -213,3 +338,14 @@ class World:
 
     def set_weather(self, params: dict[str, Any]) -> None:
         self.weather.update(params)
+
+
+__all__ = [
+    "BIOME_SECTION_VOLUME",
+    "BLOCK_SECTION_VOLUME",
+    "Chunk",
+    "ChunkSection",
+    "ChunkSectionData",
+    "PalettedContainer",
+    "World",
+]

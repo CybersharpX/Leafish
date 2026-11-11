@@ -24,6 +24,7 @@ from .protocol.protodef import ProtocolCodec
 from .protocol.session import ClientSession
 from .utils.text import component_to_text, nbt_to_python
 from .utils.vectors import BlockPos, Vec3
+from .world.chunk_codec import ChunkDecodeError, decode_chunk_sections
 from .world.world import World
 
 log = logging.getLogger("leafish.bot")
@@ -135,7 +136,13 @@ class LeafishBot:
     async def _on_packet(
         self, state: str, direction: str, name: str, params: dict[str, Any]
     ) -> None:
-        if state != "play" or direction != "toClient":
+        if direction != "toClient":
+            return
+        if state == "configuration":
+            if name == "registry_data":
+                self._on_registry_data(params)
+            return
+        if state != "play":
             return
         handler = getattr(self, f"_packet_{name}", None)
         if handler is not None:
@@ -161,12 +168,33 @@ class LeafishBot:
             },
         )
 
+    def _on_registry_data(self, params: dict[str, Any]) -> None:
+        """Capture synchronized registries sent during the config state."""
+        reg = params.get("id")
+        entries = params.get("entries") or []
+        if reg == "minecraft:dimension_type":
+            for entry in entries:
+                value = nbt_to_python(entry.get("value"))
+                if isinstance(value, dict):
+                    self.world.dimension_types[entry.get("key", "")] = {
+                        "min_y": int(value.get("min_y", -64)),
+                        "height": int(value.get("height", 384)),
+                    }
+        elif reg == "minecraft:dimension":
+            for entry in entries:
+                value = nbt_to_python(entry.get("value"))
+                if isinstance(value, dict):
+                    self.world.dimensions[entry.get("key", "")] = value
+        elif reg == "minecraft:worldgen/biome":
+            self.world.biome_count = len(entries)
+
     # -- play-state packet handlers -------------------------------------------------
 
     def _packet_login(self, params: dict[str, Any]) -> None:
         self.entity_id = params.get("entityId")
         ws = params.get("worldState", {})
         self.game_mode = ws.get("gamemode")
+        self.world.apply_dimension(ws.get("name"), ws.get("dimension"))
         if self.entity is None and self.entity_id is not None:
             self.entity = Player(id=self.entity_id, uuid=self.uuid, name=self.username)
 
@@ -221,8 +249,9 @@ class LeafishBot:
             self.emit("forced_move")
 
     def _packet_respawn(self, params: dict[str, Any]) -> None:
-        ws = params.get("worldState", {})
+        ws = params.get("worldState", params.get("commonPlayerSpawnInfo", {}))
         self.game_mode = ws.get("gamemode")
+        self.world.apply_dimension(ws.get("name"), ws.get("dimension"))
         self.world.chunks.clear()
         self.entities.clear()
         self.emit("respawn")
@@ -413,10 +442,33 @@ class LeafishBot:
     # -- world ---------------------------------------------------------------------
 
     def _packet_map_chunk(self, params: dict[str, Any]) -> None:
-        # Full chunk-column decoding lands with the world phase; for now we
-        # record coordinates so consumers know the chunk exists.
-        cx, cz = params.get("x", 0), params.get("z", 0)
-        self.world.load_chunk(cx, cz)
+        cx, cz = int(params.get("x", 0)), int(params.get("z", 0))
+        raw = params.get("chunkData")
+        if raw is None:
+            data = b""
+        elif isinstance(raw, (bytes, bytearray)):
+            data = bytes(raw)
+        else:
+            data = bytes(raw)
+        heightmaps = {
+            hm.get("type"): hm.get("data")
+            for hm in (params.get("heightmaps") or [])
+            if isinstance(hm, dict)
+        }
+        block_entities = params.get("blockEntities") or []
+        try:
+            sections = decode_chunk_sections(
+                data,
+                section_count=self.world.section_count,
+                min_section_y=self.world.min_section_y,
+            )
+        except ChunkDecodeError:
+            log.exception("Failed to decode chunk column (%d, %d)", cx, cz)
+            sections = []
+        self.world.load_chunk_data(
+            cx, cz, sections,
+            heightmaps=heightmaps, block_entities=block_entities,
+        )
         self.emit("chunk_column_load", cx, cz)
 
     def _packet_unload_chunk(self, params: dict[str, Any]) -> None:
@@ -431,6 +483,41 @@ class LeafishBot:
         if pos is not None and isinstance(state_id, int):
             self.world.set_block_state(pos, state_id)
             self.emit("block_update", pos, state_id)
+
+    def _packet_multi_block_change(self, params: dict[str, Any]) -> None:
+        coords = params.get("chunkCoordinates") or {}
+        try:
+            cx = int(coords.get("x", 0))
+            cz = int(coords.get("z", 0))
+            section_y = int(coords.get("y", 0))
+        except (AttributeError, TypeError, ValueError):
+            return
+        for record in params.get("records") or []:
+            record = int(record)
+            state_id = record >> 12
+            local = record & 0xFFF
+            lx = (local >> 8) & 0xF
+            lz = (local >> 4) & 0xF
+            ly = local & 0xF
+            pos = BlockPos(cx * 16 + lx, section_y * 16 + ly, cz * 16 + lz)
+            self.world.set_block_state(pos, state_id)
+        self.emit("multi_block_change", params)
+
+    def _packet_tile_entity_data(self, params: dict[str, Any]) -> None:
+        pos = _pos_from_bitfield(params.get("location"))
+        nbt = nbt_to_python(params.get("nbtData"))
+        block = self.world.block_at(pos) if pos is not None else None
+        if block is not None:
+            block.block_entity = nbt if isinstance(nbt, dict) else {"data": nbt}
+        self.emit("block_entity_data", pos, nbt, params)
+
+    def _packet_update_light(self, params: dict[str, Any]) -> None:
+        self.emit("update_light", params)
+
+    def _packet_chunk_biomes(self, params: dict[str, Any]) -> None:
+        # Biome-only updates carry raw paletted-container bytes per chunk;
+        # stored for consumers until light/biome queries are needed.
+        self.emit("chunk_biomes", params)
 
     def _packet_game_state_change(self, params: dict[str, Any]) -> None:
         reason = params.get("reason")
