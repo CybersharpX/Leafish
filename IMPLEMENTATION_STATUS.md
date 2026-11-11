@@ -46,28 +46,34 @@ Legend: ✅ done · 🚧 partial · ⬜ not started · ❌ unsupported/known iss
 - ✅ `LeafishBot` orchestration: connect, spawn, chat send/receive,
   position tracking, health/hunger/experience updates
 - ✅ Movement module (position/look/ground packets, teleport confirm)
-- ✅ Physics engine (gravity, collision-aware movement ticks)
+- ✅ Physics engine (AABB collision, axis-separated movement, ground
+  detection, fluid drag)
 - ✅ End-to-end integration test vs fake server (connect → spawn → chat →
   move)
 - 🚧 Entity tracking: spawn/despawn/metadata/equipment/velocity/teleport
   handled; richer entity types partial
 
 ## Phase 4 — World & entities
-- 🚧 World model: chunk column storage, block get/set API
+- ✅ World model: chunk columns, palette-container section decoding
+  (single/indirect/direct), block get/set API, block search, raycast
 - 🚧 Entities: typed entity classes (Player/Mob/ItemEntity/Projectile/Vehicle)
-- ⬜ Full chunk packet decoding (modern 1.21.x chunk format is complex)
-- ⬜ Raycast against loaded world
+- ✅ Modern 1.21.x chunk column decoding (heightmaps, block entities,
+  light masks parsed; sky/block light arrays stored but not fully exposed)
+- ✅ Raycast against loaded world
 
 ## Phase 5 — Inventory & interaction
 - 🚧 Inventory model: slots, items, equipment tracking
 - ⬜ Window/container click transactions
 - ⬜ Crafting
-- ⬜ Digging/placing
+- ✅ Digging (`start_dig`/`stop_dig`/`dig` with status packets + local
+  state), block placement with face/direction handling
 - ⬜ Item collection
+- ✅ Attack (`attack`) and equip (`equip`) actions
 
 ## Phase 6 — Automation
-- ⬜ Pathfinder
-- ⬜ Combat
+- ✅ Pathfinder: A* over the collision grid with step-ups, `goto`
+  execution with stuck detection and replan
+- ⬜ Combat AI (attack only; no target selection/kit logic)
 - ⬜ Fishing/farming
 
 ## Phase 7 — Extensibility
@@ -89,8 +95,8 @@ Legend: ✅ done · 🚧 partial · ⬜ not started · ❌ unsupported/known iss
 | Java 1.21.11 | 774 | 🚧 connect/spawn/chat/move verified vs fake server; real-server validation pending |
 
 ## Known limitations / bugs
-- Chunk decoding for the modern format is incomplete — `world` block lookups
-  only work for data injected manually or via simple paths.
+- Chunk light data is stored but not exposed; chunk data does not yet
+  handle every 1.21.x edge case (e.g. some multi-block-change variants).
 - Microsoft auth flow is implemented but unverified against live Xbox Live
   endpoints.
 - Encryption path is implemented but only exercised by unit-level tests,

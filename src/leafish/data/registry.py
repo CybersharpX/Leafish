@@ -33,6 +33,7 @@ class GameData:
         self._load("blocks")
         self._load("items")
         self._load("entities")
+        self._load("recipes")
         self._index_blocks()
         self._index_items()
         self._index_entities()
@@ -205,6 +206,22 @@ class GameData:
     def entity_type_ids(self) -> dict[int, str]:
         self._ensure_loaded()
         return self._entity_type_ids
+
+    # -- recipes ------------------------------------------------------------------
+
+    def recipes(self) -> dict[str, Any]:
+        """Raw ``recipes.json``: ``{recipe_id: [variant, ...]}``.
+
+        Each variant has either ``inShape`` (grid of item ids / null) for
+        shaped recipes or ``ingredients`` (list of item ids) for shapeless
+        ones, plus ``result: {id, count}``.
+        """
+        self._ensure_loaded()
+        return self._raw.get("recipes") or {}
+
+    def item_id_by_name(self, name: str) -> int | None:
+        item = self.item_by_name(name)
+        return item["id"] if item else None
 
     # -- misc ---------------------------------------------------------------------
 

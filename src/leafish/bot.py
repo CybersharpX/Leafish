@@ -18,6 +18,7 @@ from .exceptions import LeafishError
 from .inventory.inventory import Inventory
 from .modules.actions import ActionsModule
 from .modules.chat import ChatModule
+from .modules.crafting import CraftingModule
 from .modules.health import HealthModule
 from .modules.movement import CONTROL_STATES, MovementModule
 from .modules.pathfinder import Pathfinder
@@ -65,6 +66,7 @@ class LeafishBot:
         self.health = HealthModule(self)
         self.chat_module = ChatModule(self)
         self.actions = ActionsModule(self)
+        self.crafting = CraftingModule(self)
         self.pathfinder = Pathfinder(self)
 
         # Movement control states --------------------------------------------
@@ -159,12 +161,17 @@ class LeafishBot:
                 log.exception("Packet handler for '%s' failed", name)
                 self.emit("error", name, params)
 
-    async def _click_window_slot(self, window_id: int, slot: int, button: int = 0) -> None:
+    async def _click_window_slot(
+        self, window_id: int, slot: int, button: int = 0,
+        state_id: int | None = None,
+    ) -> None:
         await self._send_play(
             "window_click",
             {
                 "windowId": window_id,
-                "stateId": 0,
+                "stateId": (
+                    self.inventory_state_id if state_id is None else state_id
+                ),
                 "slot": slot,
                 "mouseButton": button,
                 "mode": 0,
@@ -697,6 +704,11 @@ class LeafishBot:
 
     async def set_quick_bar_slot(self, slot: int) -> None:
         await self.inventory.set_held_slot(slot)
+
+    async def craft(self, item_name: str, count: int = 1,
+                    crafting_table: bool = False) -> int:
+        """Craft *count* of *item_name*; returns items actually crafted."""
+        return await self.crafting.craft(item_name, count, crafting_table)
 
     # -- world actions ------------------------------------------------------------------
 

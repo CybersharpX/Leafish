@@ -62,10 +62,15 @@ class Inventory:
 
     # -- updates from server ----------------------------------------------------
 
+    def _resolve(self, item: Item | None) -> Item | None:
+        if item is not None and item.item_id is not None and item.name is None:
+            item.name = self.bot.world.gamedata.item_name(item.item_id)
+        return item
+
     def update_slot(self, window_id: int, slot: int, item_data: dict[str, Any]) -> None:
         if window_id != self._window_id:
             return
-        item = Item.from_slot(item_data, slot)
+        item = self._resolve(Item.from_slot(item_data, slot))
         if item is None:
             self.slots.pop(slot, None)
         else:
@@ -77,7 +82,7 @@ class Inventory:
             return
         self.slots.clear()
         for idx, data in enumerate(items_data):
-            item = Item.from_slot(data, idx)
+            item = self._resolve(Item.from_slot(data, idx))
             if item is not None:
                 self.slots[idx] = item
 
