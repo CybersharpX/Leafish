@@ -24,5 +24,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Actions: digging, block placement, attack, equip.
 - Physics: AABB collision, ground detection, fluid movement.
 - Pathfinder: A* with step-ups and `goto` execution.
+- Crafting: shaped/shapeless recipes via 2x2 grid clicks; fake server
+  gained an inventory model and minimal recipe matching.
 - Fake protocol server + end-to-end integration tests.
 - `tools/fetch_mcdata.py` for vendoring minecraft-data JSON.
