@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import logging
+import time
 from typing import Any
 
 from .auth.microsoft import MicrosoftAuth
@@ -39,6 +40,11 @@ from .modules.state import (
     GameInfo,
     SettingsInfo,
     TimeInfo,
+)
+from .modules.windows import (
+    AnvilWindow,
+    EnchantmentTableWindow,
+    FurnaceWindow,
 )
 from .plugins import PluginManager
 from .protocol.protodef import ProtocolCodec
@@ -510,6 +516,48 @@ class LeafishBot:
             self.containers.close_window(int(wid))
         self.emit("window_close", wid)
 
+    def _packet_craft_progress_bar(self, params: dict[str, Any]) -> None:
+        wid = int(params.get("windowId", 0))
+        prop = int(params.get("property", 0))
+        value = int(params.get("value", 0))
+        self.containers.set_property(wid, prop, value)
+        self.emit("window_property", wid, prop, value)
+
+    def _packet_trade_list(self, params: dict[str, Any]) -> None:
+        wid = int(params.get("windowId", 0))
+        trades = params.get("trades", [])
+        self.containers.set_extras(
+            wid,
+            trades=trades,
+            villagerLevel=params.get("villagerLevel"),
+            experience=params.get("experience"),
+            isRegularVillager=params.get("isRegularVillager"),
+            canRestock=params.get("canRestock"),
+        )
+        self.emit("trade_list", wid, trades)
+        self.emit("villager_trade_list", wid, trades)
+
+    def _packet_open_horse_window(self, params: dict[str, Any]) -> None:
+        wid = params.get("windowId")
+        self.current_window_id = wid
+        if wid is not None:
+            nb = int(params.get("nbSlots", 0))
+            self.containers.open_window(
+                int(wid), "Horse", None)
+            self.containers.set_extras(
+                int(wid), entityId=params.get("entityId"),
+                slotCount=nb)
+            win = self.containers.windows.get(int(wid))
+            if win is not None:
+                win.player_offset = max(0, nb)
+        self.emit("open_horse_window", params)
+
+    def _packet_declare_recipes(self, params: dict[str, Any]) -> None:
+        self.emit("declare_recipes", params)
+
+    def _packet_craft_recipe_response(self, params: dict[str, Any]) -> None:
+        self.emit("craft_recipe_response", params)
+
     # -- entities -----------------------------------------------------------------
 
     def _packet_spawn_entity(self, params: dict[str, Any]) -> None:
@@ -704,12 +752,6 @@ class LeafishBot:
     def _packet_entity_status(self, params: dict[str, Any]) -> None:
         self.emit("entity_status", params.get("entityId"), params.get("entityStatus"))
 
-    def _packet_entity_effect(self, params: dict[str, Any]) -> None:
-        self.emit("entity_effect", params)
-
-    def _packet_remove_entity_effect(self, params: dict[str, Any]) -> None:
-        self.emit("remove_entity_effect", params)
-
     def _packet_entity_update_attributes(self, params: dict[str, Any]) -> None:
         self.emit("entity_update_attributes", params)
 
@@ -717,28 +759,13 @@ class LeafishBot:
         self.client.record_explosion(params)
         self.emit("explosion", params)
 
-    def _packet_damage_event(self, params: dict[str, Any]) -> None:
-        self.emit("damage_event", params)
-
     def _packet_world_event(self, params: dict[str, Any]) -> None:
         self.emit("world_event", params)
-
-    def _packet_world_particles(self, params: dict[str, Any]) -> None:
-        self.emit("world_particles", params)
-
-    def _packet_sound_effect(self, params: dict[str, Any]) -> None:
-        self.emit("sound_effect", params)
-
-    def _packet_entity_sound_effect(self, params: dict[str, Any]) -> None:
-        self.emit("entity_sound_effect", params)
 
     def _packet_entity_head_rotation(self, params: dict[str, Any]) -> None:
         e = self.entities.get(params["entityId"])
         if e is not None:
             e.head_yaw = float(params.get("headYaw", 0)) * 360.0 / 256.0
-
-    def _packet_attach_entity(self, params: dict[str, Any]) -> None:
-        self.emit("attach_entity", params)
 
     def _packet_update_view_position(self, params: dict[str, Any]) -> None:
         self.emit("update_view_position", params)
@@ -889,6 +916,7 @@ class LeafishBot:
                 else:
                     self.emit("mount", vehicle)
         self.emit("entity_attach", e, vehicle_id)
+        self.emit("attach_entity", params)
 
     def _packet_set_passengers(self, params: dict[str, Any]) -> None:
         e = self.entities.get(_entity_id(params, "entityId"))
@@ -1349,6 +1377,50 @@ class LeafishBot:
         Returns the new window id, or ``None`` if none opened in time.
         """
         return await self.containers.open_container(block, timeout)
+
+    async def open_window(self, block, timeout: float = 5.0):
+        """Open *block*'s window and return a typed window view.
+
+        The concrete class depends on the container: ``FurnaceWindow``,
+        ``EnchantmentTableWindow``, ``AnvilWindow``, ``VillagerWindow``
+        or the generic ``Window``. Returns ``None`` on timeout.
+        """
+        return await self.containers.open_typed(block, timeout)
+
+    async def open_furnace(self, block, timeout: float = 5.0) -> FurnaceWindow | None:
+        """Open a furnace/blast furnace/smoker at *block*."""
+        win = await self.open_window(block, timeout)
+        return win if isinstance(win, FurnaceWindow) else None
+
+    async def open_enchantment_table(
+            self, block, timeout: float = 5.0) -> EnchantmentTableWindow | None:
+        """Open an enchanting table at *block*."""
+        win = await self.open_window(block, timeout)
+        return win if isinstance(win, EnchantmentTableWindow) else None
+
+    async def open_anvil(self, block, timeout: float = 5.0) -> AnvilWindow | None:
+        """Open an anvil at *block*."""
+        win = await self.open_window(block, timeout)
+        return win if isinstance(win, AnvilWindow) else None
+
+    async def open_villager(self, entity, timeout: float = 5.0):
+        """Open a villager/trader *entity*'s trading window."""
+        before = set(self.containers.windows)
+        await self.actions.use_on(entity)
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            new = [w for w in self.containers.windows if w not in before]
+            if new:
+                return self.containers.window_view(new[0])
+            await asyncio.sleep(0.05)
+        return None
+
+    @property
+    def current_window(self):
+        """Typed view of the currently open window, or ``None``."""
+        if self.current_window_id is None:
+            return None
+        return self.containers.window_view(self.current_window_id)
 
     # -- world actions ------------------------------------------------------------------
 

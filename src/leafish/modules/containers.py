@@ -18,6 +18,7 @@ from ..inventory.item import Item
 
 if TYPE_CHECKING:
     from ..bot import LeafishBot
+    from .windows import Window
 
 __all__ = ["ContainerModule", "SimpleClick", "WindowState"]
 
@@ -35,6 +36,10 @@ class WindowState:
     state_id: int = 0
     player_offset: int | None = None
     """Index of the first player-inventory slot (len(items) - 36)."""
+    properties: dict[int, int] = field(default_factory=dict)
+    """Window properties (furnace progress, anvil cost, ...)."""
+    extras: dict[str, Any] = field(default_factory=dict)
+    """Container-specific server data (trades, entity id, ...)."""
 
     @property
     def size(self) -> int:
@@ -102,6 +107,35 @@ class ContainerModule:
         win = self.windows.get(window_id)
         if win is not None:
             win.state_id = state_id
+
+    def set_property(self, window_id: int, prop: int, value: int) -> None:
+        """Record a ``craft_progress_bar`` window property."""
+        win = self.windows.get(window_id)
+        if win is not None:
+            win.properties[int(prop)] = int(value)
+
+    def set_extras(self, window_id: int, **values: Any) -> None:
+        """Attach container-specific server data to a window."""
+        win = self.windows.get(window_id)
+        if win is not None:
+            win.extras.update(values)
+
+    def window_view(self, window_id: int) -> Window:
+        """Return the typed :class:`~leafish.modules.windows.Window` view."""
+        from .windows import typed_window
+
+        win = self.windows.get(window_id)
+        if win is None:
+            raise InventoryError(f"Window {window_id} is not open")
+        return typed_window(self.bot, win)
+
+    async def open_typed(self, reference_block,
+                         timeout: float = 5.0) -> Window | None:
+        """Like :meth:`open_container`, returning a typed window view."""
+        wid = await self.open_container(reference_block, timeout)
+        if wid is None:
+            return None
+        return self.window_view(wid)
 
     def _resolve(self, item: Item | None) -> Item | None:
         if item is not None and item.item_id is not None and item.name is None:
