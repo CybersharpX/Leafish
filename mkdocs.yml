@@ -1,0 +1,43 @@
+site_name: Leafish
+site_description: A pure Python, asynchronous Minecraft Java Edition bot framework.
+repo_url: https://github.com/CybersharpX/Leafish
+theme:
+  name: shadcn
+nav:
+  - Home: index.md
+  - Getting Started:
+    - Installation: getting-started/installation.md
+    - Quickstart: getting-started/quickstart.md
+    - Authentication: getting-started/authentication.md
+    - Configuration: getting-started/configuration.md
+  - Concepts:
+    - Architecture: concepts/architecture.md
+    - Events: concepts/events.md
+    - Plugins: concepts/plugins.md
+    - Versions & Data: concepts/versions-and-data.md
+  - Guides:
+    - Chat & Commands: guides/chat.md
+    - Movement & Pathfinding: guides/movement.md
+    - World Interaction: guides/world-interaction.md
+    - Inventory & Containers: guides/inventory-containers.md
+    - Crafting & Smelting: guides/crafting-smelting.md
+    - Combat & PvP: guides/combat.md
+    - Automation: guides/automation.md
+    - Creative Mode: guides/creative-mode.md
+  - API Reference:
+    - Overview: api/index.md
+    - LeafishBot: api/bot.md
+    - World: api/world.md
+    - Entities: api/entities.md
+    - Inventory: api/inventory.md
+    - Windows: api/windows.md
+    - Pathfinder: api/pathfinder.md
+    - Modules: api/modules.md
+    - State: api/state.md
+    - Plugins: api/plugins.md
+    - Authentication: api/auth.md
+    - Game Data: api/gamedata.md
+    - Events: api/events.md
+    - Exceptions: api/exceptions.md
+    - Utilities: api/utils.md
+  - Examples: examples.md
