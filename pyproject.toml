@@ -30,7 +30,8 @@ dependencies = [
 [project.optional-dependencies]
 docs = [
     "mkdocs>=1.5",
-    "mkdocs-material>=9.5",
+    "mkdocs-shadcn",
+    "Pygments",
 ]
 dev = [
     "leafish[docs]",
