@@ -88,6 +88,12 @@ asyncio.run(main())
 
 Start a local Minecraft Java server in offline mode, run the script, and watch the bot join.
 
+## Documentation
+
+Documentation of Leafish
+
+- [Leafish Documentation](https://leafish.readthedocs.io/)
+
 ## 📊 Project status
 
 Leafish is built incrementally: protocol layer first, then the bot API, world model, and automation modules.
@@ -112,3 +118,11 @@ Before opening a pull request, please check [IMPLEMENTATION_STATUS.md](IMPLEMENT
 ## 📄 License
 
 Released under the [MIT License](LICENSE).
+
+## Community
+
+Discord: [Leafish Discord Server](https://discord.gg/TtFH7wrWJp)
+
+### Want to join me for Leafish's dev ?
+
+Ask me on the Discord.
