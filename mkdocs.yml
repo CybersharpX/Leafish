@@ -1,8 +1,21 @@
 site_name: Leafish
 site_description: A pure Python, asynchronous Minecraft Java Edition bot framework.
 repo_url: https://github.com/CybersharpX/Leafish
+
 theme:
   name: shadcn
+  pygments_style:
+    light: shadcn-light
+    dark: github-dark
+
+markdown_extensions:
+  - codehilite:
+      guess_lang: false
+  - fenced_code
+  - admonition
+  - footnotes
+  - tables
+
 nav:
   - Home: index.md
   - Getting Started:
